@@ -1,0 +1,42 @@
+# @package _global_
+
+# Hydra config for utils/convert_act_hdf5_to_lerobot.py.
+# Field names match the argparse Namespace used by convert(args).
+
+# Input ACT/Aloha HDF5 directory. The script looks for episode_*.hdf5 here.
+raw_dir: /home/arx/act/datasets
+
+# LeRobot output identity and location.
+repo_id: local/act_aloha
+root: null
+robot_type: arx5
+
+# Dataset metadata.
+# fps is only used when the first HDF5 file does not define attrs["frame_rate"].
+fps: 50.0
+task: null
+default_task: "Put the apple in the bowl."
+
+# Raw HDF5 image dataset key -> LeRobot feature key.
+# These entries are parsed as "raw_key=lerobot_key".
+image_map:
+  - middle_image=observation.images.top
+  - right_image=observation.images.right_wrist
+
+# Conversion behavior.
+no_videos: True
+overwrite: false
+dry_run: false
+max_episodes: null
+
+# LeRobot writer options.
+tolerance_s: 1.0e-4
+image_writer_processes: 0
+image_writer_threads: 0
+video_backend: null
+
+# Optional Hydra runtime settings if this file is used as the primary config.
+hydra:
+  run:
+    dir: .
+  output_subdir: null
