@@ -7,14 +7,19 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 
+FILE = Path(__file__).resolve()
+SCRIPT_DIR = FILE.parent
+REPO_ROOT = SCRIPT_DIR.parent
+for path in (
+    REPO_ROOT,
+    REPO_ROOT / "src",
+    REPO_ROOT / "packages" / "openpi-client" / "src",
+):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
+
 from openpi_client import image_tools
-from openpi_client import websocket_client_policy as _websocket_client_policy
 
-ACT_ROOT = Path("/home/ubuntu/ACT")
-if str(ACT_ROOT) not in sys.path:
-    sys.path.insert(0, str(ACT_ROOT))
-
-from utils.arx_controller import Arx5BimanualOperator
 from utils.realsense_cam import RealSenseManager
 
 
@@ -63,6 +68,8 @@ class DualArmCollector:
     """ARX bimanual controller used by the OpenPI websocket client."""
 
     def __init__(self):
+        from utils.arx_controller import Arx5BimanualOperator
+
         self.args = SimpleNamespace(
             left_model=LEFT_MODEL,
             right_model=RIGHT_MODEL,
@@ -288,6 +295,11 @@ class AsyncInferenceManager:
 
 
 def main():
+    try:
+        from openpi_client import websocket_client_policy as _websocket_client_policy
+    except ImportError as exc:
+        raise ImportError("openpi_client.websocket_client_policy requires `websockets`. Run dependency sync/install first.") from exc
+
     print("初始化 ARX 机械臂控制器...")
     arx_controller = DualArmCollector()
     time.sleep(2)

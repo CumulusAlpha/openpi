@@ -25,14 +25,17 @@ image_map:
 
 # Conversion behavior.
 no_videos: True
-overwrite: false
-dry_run: false
+overwrite: True
 max_episodes: null
+# LeRobot buffers one episode until save_episode(). Use a frame limit to flush
+# long raw HDF5 episodes as smaller LeRobot episode shards. Set null to preserve
+# one LeRobot episode per HDF5 file.
+frames_per_episode: 1000
 
 # LeRobot writer options.
 tolerance_s: 1.0e-4
-image_writer_processes: 0
-image_writer_threads: 0
+image_writer_processes: 12
+image_writer_threads: 12
 video_backend: null
 
 # Optional Hydra runtime settings if this file is used as the primary config.
