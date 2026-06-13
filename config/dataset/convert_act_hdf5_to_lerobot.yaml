@@ -4,11 +4,11 @@
 # Field names match the argparse Namespace used by convert(args).
 
 # Input ACT/Aloha HDF5 directory. The script looks for episode_*.hdf5 here.
-raw_dir: /home/arx/act/datasets
+raw_dir: /data/sy/project/openpi/logs/datasets
 
 # LeRobot output identity and location.
 repo_id: local/act_aloha
-root: /home/arx/openpi/data/local/act_aloha
+root: /data/sy/project/openpi/data/apple
 robot_type: arx5
 
 # Dataset metadata.
