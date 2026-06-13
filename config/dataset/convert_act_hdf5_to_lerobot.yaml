@@ -8,7 +8,7 @@ raw_dir: /home/arx/act/datasets
 
 # LeRobot output identity and location.
 repo_id: local/act_aloha
-root: null
+root: /home/arx/openpi/data/local/act_aloha
 robot_type: arx5
 
 # Dataset metadata.
@@ -27,15 +27,11 @@ image_map:
 no_videos: True
 overwrite: True
 max_episodes: null
-# LeRobot buffers one episode until save_episode(). Use a frame limit to flush
-# long raw HDF5 episodes as smaller LeRobot episode shards. Set null to preserve
-# one LeRobot episode per HDF5 file.
-frames_per_episode: 1000
 
 # LeRobot writer options.
 tolerance_s: 1.0e-4
-image_writer_processes: 12
-image_writer_threads: 12
+image_writer_processes: 8
+image_writer_threads: 8
 video_backend: null
 
 # Optional Hydra runtime settings if this file is used as the primary config.
