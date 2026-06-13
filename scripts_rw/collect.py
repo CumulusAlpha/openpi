@@ -51,6 +51,8 @@ _voice_warning_shown = False
 
 VALID_RECORD_MODES = {'Distance', 'Speed'}
 DEFAULT_VISER_URDF_PATH = Path('/home/arx/arx5-sdk/models/X5.urdf')
+SAVE_IMAGE_WIDTH = 640
+SAVE_IMAGE_HEIGHT = 480
 BUTTON_HOME = 0
 BUTTON_START = 1
 BUTTON_NEXT_SAVE = 2
@@ -392,45 +394,16 @@ class CollectRunner:
             self.button_reader = None
 
 
-def compress_and_pad_images(data_dict, camera_names, use_depth, quality=50):
-    if not camera_names:
-        return 0, 0
-
-    def compress_and_pad(key_suffix):
-        encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), quality]
-        all_encoded = []
-
-        if not camera_names:
-            return 0
-
-        for cam in camera_names:
-            key = f'/observations/{cam}_{key_suffix}'
-            encoded_list = []
-            for img in data_dict[key]:
-                _, enc = cv2.imencode('.jpg', img, encode_param)
-                encoded_list.append(enc)
-                all_encoded.append(len(enc))
-            data_dict[key] = encoded_list
-
-        padded_size = max(all_encoded)
-
-        for cam in camera_names:
-            key = f'/observations/{cam}_{key_suffix}'
-            padded = [np.pad(enc, (0, padded_size - len(enc)), constant_values=0) for enc in data_dict[key]]
-            data_dict[key] = padded
-
-        return padded_size
-
-    # RGB
-    padded_size = compress_and_pad('image')
-
-    # Depth
-    padded_size_depth = compress_and_pad('depth_image') if use_depth else 0
-
-    return padded_size, padded_size_depth
+def prepare_image_for_save(image):
+    image = np.asarray(image)
+    if image.shape[:2] != (SAVE_IMAGE_HEIGHT, SAVE_IMAGE_WIDTH):
+        image = cv2.resize(image, (SAVE_IMAGE_WIDTH, SAVE_IMAGE_HEIGHT), interpolation=cv2.INTER_AREA)
+    if image.dtype != np.uint8:
+        image = np.clip(image, 0, 255).astype(np.uint8)
+    return image
 
 
-def create_and_write_hdf5(args, data_dict, dataset_path, data_size, padded_size, padded_size_depth):
+def create_and_write_hdf5(args, data_dict, dataset_path, data_size):
     try:
         import h5py
     except ImportError as exc:
@@ -446,11 +419,11 @@ def create_and_write_hdf5(args, data_dict, dataset_path, data_size, padded_size,
 
         obs_dict = root.create_group('observations')
         for cam_name in args.camera_names:
-            img_shape = (data_size, padded_size)
-            img_chunk = (1, padded_size)
+            img_shape = (data_size, SAVE_IMAGE_HEIGHT, SAVE_IMAGE_WIDTH, 3)
+            img_chunk = (1, SAVE_IMAGE_HEIGHT, SAVE_IMAGE_WIDTH, 3)
             if args.use_depth_image:
-                depth_shape = (data_size, padded_size_depth)
-                depth_chunk = (1, padded_size_depth)
+                depth_shape = (data_size, SAVE_IMAGE_HEIGHT, SAVE_IMAGE_WIDTH, 3)
+                depth_chunk = (1, SAVE_IMAGE_HEIGHT, SAVE_IMAGE_WIDTH, 3)
 
             obs_dict.create_dataset(f'{cam_name}_image', img_shape, 'uint8', chunks=img_chunk)
             if args.use_depth_image:
@@ -507,14 +480,16 @@ def save_data(args, observations, actions, actions_eef, dataset_path):
 
         # 相机数据
         for cam_name in args.camera_names:
-            data_dict[f'/observations/{cam_name}_image'].append(obs[f'{cam_name}_image'])
+            data_dict[f'/observations/{cam_name}_image'].append(
+                prepare_image_for_save(obs[f'{cam_name}_image'])
+            )
             if args.use_depth_image:
-                data_dict[f'/observations/{cam_name}_depth_image'].append(obs[f'{cam_name}_depth_image'])
-
-    padded_size, padded_size_depth = compress_and_pad_images(data_dict, args.camera_names, args.use_depth_image)
+                data_dict[f'/observations/{cam_name}_depth_image'].append(
+                    prepare_image_for_save(obs[f'{cam_name}_depth_image'])
+                )
 
     t0 = time.time()
-    create_and_write_hdf5(args, data_dict, dataset_path, data_size, padded_size, padded_size_depth)
+    create_and_write_hdf5(args, data_dict, dataset_path, data_size)
 
     voice_process(voice_engine, "Save")
     log_message(f"Saved in {time.time() - t0:.1f}s: {dataset_path}")
