@@ -825,6 +825,46 @@ _CONFIGS = [
         num_train_steps=20_000,
         batch_size=64,
     ),
+    TrainConfig(
+        name="pi0_arx_lora_chunk50_delta",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+            action_horizon=50,
+        ),
+        data=LeRobotAlohaDataConfig(
+            repo_id="/data/sy/project/openpi/data/apple",
+            use_delta_joint_actions=True,
+            adapt_to_pi=False,
+            repack_transforms=_transforms.Group(
+                inputs=[
+                    _transforms.RepackTransform(
+                        {
+                            "images": {
+                                "cam_high": "observation.images.top",
+                                "cam_right_wrist": "observation.images.right_wrist",
+                            },
+                            "state": "observation.state",
+                            "actions": "action",
+                        }
+                    )
+                ]
+            ),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "/data/sy/project/openpi/pretrained_weights/pi05_base/params"
+        ),
+        num_train_steps=30_000,
+        batch_size=16,
+        freeze_filter=pi0_config.Pi0Config(
+            pi05=True,
+            paligemma_variant="gemma_2b_lora",
+            action_expert_variant="gemma_300m_lora",
+            action_horizon=50,
+        ).get_freeze_filter(),
+        ema_decay=None,
+    ),
     #
     # Fine-tuning DROID configs.
     #

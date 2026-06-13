@@ -169,3 +169,7 @@ cython_debug/
 pretrained_weights/*
 *.zip
 logs/*
+# Local Git SSH key
+project_git_key
+project_git_key.pub
+use_project_git_key.sh
