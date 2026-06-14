@@ -836,6 +836,7 @@ _CONFIGS = [
         data=LeRobotAlohaDataConfig(
             repo_id="/data/sy/project/openpi/data/apple",
             use_delta_joint_actions=True,
+            default_prompt="pick up the apple and put it in the white bowl",
             adapt_to_pi=False,
             repack_transforms=_transforms.Group(
                 inputs=[
@@ -855,8 +856,16 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader(
             "/data/sy/project/openpi/pretrained_weights/pi05_base/params"
         ),
+        # optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        # ema_decay=0.999,
+        # lr_schedule=_optimizer.CosineDecaySchedule(
+        #     warmup_steps=10_000,
+        #     peak_lr=5e-5,
+        #     decay_steps=1_000_000,
+        #     decay_lr=5e-5,
+        # ),
         num_train_steps=30_000,
-        batch_size=16,
+        batch_size=24,
         freeze_filter=pi0_config.Pi0Config(
             pi05=True,
             paligemma_variant="gemma_2b_lora",
