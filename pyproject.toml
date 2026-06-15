@@ -42,6 +42,7 @@ dependencies = [
     "arx5-interface>=0.1.2",
     "viser>=1.0.30",
     "yourdfpy>=0.0.60",
+    "pyrealsense2>=2.58.2.10647",
 ]
 
 

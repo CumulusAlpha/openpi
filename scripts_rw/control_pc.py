@@ -6,6 +6,7 @@ from collections import deque
 from pathlib import Path
 import sys
 from types import SimpleNamespace
+import traceback
 
 FILE = Path(__file__).resolve()
 SCRIPT_DIR = FILE.parent
@@ -24,17 +25,21 @@ from utils.realsense_cam import RealSenseManager
 
 
 # ================= 配置区域 =================
-HOST = "192.3.8.52" # 192.3.8.52 127.0.0.1 10.140.66.121
-PORT = 8000
+HOST = "127.0.0.1"
+PORT = 18000
 TIMEOUT = 15000
 
-FPS = 30
-S_MIN = 4 #30  # 3 30
+FPS = 50
+S_MIN = 30 
+ACTION_SAFETY_CLIP = True
+ACTION_LPF_ALPHA = 0.35
+MAX_JOINT_STEP = 0.025
+MAX_GRIPPER_STEP = 0.003
 
 TASK = "Complete_chemical_reaction_experiment"
 
 DELAY = 0 # 强制控制推理延迟
-USE_RTC = True
+USE_RTC = False
 
 LEFT_MODEL = "X5"
 RIGHT_MODEL = "X5"
@@ -89,6 +94,7 @@ class DualArmCollector:
             align_to_color=REALSENSE_ALIGN_TO_COLOR,
             verbose=REALSENSE_VERBOSE,
         )
+        self.last_commanded_action = None
 
     def get_observation(self) -> dict:
         qpos, qvel, effort, eef = self.robot_operator.read_arms()
@@ -118,12 +124,29 @@ class DualArmCollector:
         action = np.asarray(action, dtype=np.float64).reshape(-1)
         if action.shape[0] != 14:
             raise ValueError(f"ARX action should have 14 values, got shape {action.shape}")
-        self.robot_operator.set_command_active()
+        if self.last_commanded_action is None:
+            qpos, _, _, _ = self.robot_operator.read_arms()
+            self.last_commanded_action = qpos.astype(np.float64)
+        action = ACTION_LPF_ALPHA * action + (1.0 - ACTION_LPF_ALPHA) * self.last_commanded_action
+        if ACTION_SAFETY_CLIP:
+            qpos, _, _, _ = self.robot_operator.read_arms()
+            step_limits = np.array([MAX_JOINT_STEP] * 6 + [MAX_GRIPPER_STEP] + [MAX_JOINT_STEP] * 6 + [MAX_GRIPPER_STEP])
+            delta = np.clip(action - qpos, -step_limits, step_limits)
+            clipped_action = qpos + delta
+            if np.max(np.abs(action - clipped_action)) > 1e-6:
+                print(
+                    "[safety] action clipped "
+                    f"raw_delta_max={np.max(np.abs(action - qpos)):.4f} "
+                    f"sent_delta_max={np.max(np.abs(delta)):.4f}"
+                )
+            action = clipped_action
+        self.last_commanded_action = action.copy()
         self.robot_operator.command_arms(action, command_delay=1.0 / FPS)
 
     def go_home(self):
         self.robot_operator.reset_to_home()
         self.robot_operator.set_command_active()
+        self.last_commanded_action = None
 
     def close(self):
         if self.realsense_manager is not None:
@@ -135,26 +158,27 @@ class DualArmCollector:
 
 
 def convert_obs_to_openpi(obs: dict) -> dict:
-    """Convert DualArmCollector obs to the LeRobot 630 schema."""
+    """Convert DualArmCollector obs to the ALOHA policy server schema."""
     images = obs["images"]
     left_qpos = np.asarray(obs["left_qpos"], dtype=np.float32)
     right_qpos = np.asarray(obs["right_qpos"], dtype=np.float32)
+    state = np.concatenate([left_qpos[:7], right_qpos[:7]]).astype(np.float32)
 
     return {
-        "images.rgb.head": _resize_image(images["head"]),
-        "images.rgb.hand_left": _resize_image(images["left_wrist"]),
-        "images.rgb.hand_right": _resize_image(images["right_wrist"]),
-        "states.left_joint.position": left_qpos[:6],
-        "states.left_gripper.position": left_qpos[6:7],
-        "states.right_joint.position": right_qpos[:6],
-        "states.right_gripper.position": right_qpos[6:7],
+        "images": {
+            "cam_high": _resize_image_chw(images["head"]),
+            "cam_left_wrist": _resize_image_chw(images["left_wrist"]),
+            "cam_right_wrist": _resize_image_chw(images["right_wrist"]),
+        },
+        "state": state,
         "prompt": TASK,
     }
 
 
-def _resize_image(img):
+def _resize_image_chw(img):
     img = image_tools.convert_to_uint8(img)
-    return image_tools.resize_with_pad(img, 224, 224)
+    img = image_tools.resize_with_pad(img, 224, 224)
+    return np.asarray(img).transpose(2, 0, 1)
     
 
 class AsyncInferenceManager:
@@ -215,20 +239,27 @@ class AsyncInferenceManager:
                 o = self.o_cur
                 self.chunk_prev = deepcopy(self.A_cur) # 保存上一个chunk
                 
-            A_new = self._run_guided_inference(o, s)
+            try:
+                A_new = self._run_guided_inference(o, s)
+            except Exception:
+                traceback.print_exc()
+                with self.action_lock:
+                    self.is_inferencing = False
+                continue
             
             # 更新共享状态
             with self.action_lock:
+                elapsed_steps = max(self.t - s, 0)
                 self.A_cur = A_new
                 self.chunk_cur = deepcopy(self.A_cur)
-                self.t = self.t - s
+                self.t = min(elapsed_steps, max(len(A_new) - 2, 0))
                 self.delay_queue.append(self.t)
                 self.action_chunk_list.append({'chunk_prev': np.array(self.chunk_prev), 
                                                'chunk_cur': np.array(self.chunk_cur), 
                                                'start': s, 'persist': self.t})
                 self.is_inferencing = False
             
-            print(f"推理完成: 生成{len(A_new)}个动作")
+            print(f"推理完成: 生成{len(A_new)}个动作, elapsed_steps={elapsed_steps}, resume_t={self.t}")
 
     def _run_guided_inference(self, obs_dict, s):
         # import pdb; pdb.set_trace()
@@ -252,10 +283,6 @@ class AsyncInferenceManager:
                 constant_values=0.0
             )
             obs_openpi["actions"] = padded_actions
-            obs_openpi["actions.left_joint.position"] = padded_actions[:, :6]
-            obs_openpi["actions.left_gripper.position"] = padded_actions[:, 6:7]
-            obs_openpi["actions.right_joint.position"] = padded_actions[:, 7:13]
-            obs_openpi["actions.right_gripper.position"] = padded_actions[:, 13:14]
             action_dict = self.client.infer_rtc(
                 obs_openpi,
                 delay=delay,
