@@ -47,6 +47,8 @@ DEFAULT_IMAGE_MAP = {
     "right_image": "observation.images.right_wrist",
 }
 
+RIGHT_GRIPPER_ACTION_DIM = 13
+
 MOTOR_NAMES = [
     "left_joint1",
     "left_joint2",
@@ -220,11 +222,27 @@ def state2action(actions: np.ndarray) -> np.ndarray:
     return np.concatenate([actions[1:], actions[-1:]], axis=0)
 
 
+def binarize_right_gripper_actions(actions: np.ndarray, cfg: DictConfig | None) -> np.ndarray:
+    if cfg is None or not bool(cfg.get("enabled", False)):
+        return actions
+
+    actions = np.asarray(actions, dtype=np.float32).copy()
+    if actions.ndim != 2:
+        raise ValueError(f"Expected actions to have shape (T, D), got {actions.shape}")
+    if RIGHT_GRIPPER_ACTION_DIM >= actions.shape[1]:
+        raise ValueError(f"Right gripper dim is out of range for action shape {actions.shape}")
+
+    close_below = float(cfg.get("close_below", 0.079))
+    actions[:, RIGHT_GRIPPER_ACTION_DIM] = (actions[:, RIGHT_GRIPPER_ACTION_DIM] < close_below).astype(np.float32)
+    return actions
+
+
 def convert(args: DictConfig) -> Path:
     raw_dir = Path(args.raw_dir).expanduser()
     root = Path(args.root).expanduser() if args.root else HF_LEROBOT_HOME / args.repo_id
     output_path = root
     image_map = parse_image_map(args.image_map)
+    right_gripper_binarization = args.get("right_gripper_binarization")
     hdf5_files = find_hdf5_files(raw_dir)
     if args.max_episodes is not None:
         hdf5_files = hdf5_files[: args.max_episodes]
@@ -248,6 +266,12 @@ def convert(args: DictConfig) -> Path:
     print(f"State dim: {state_dim}, action dim: {action_dim}")
     print(f"Images: {image_map}")
     print(f"First episode frames: {first_info.num_frames}, image shapes: {first_info.image_shapes}")
+    if right_gripper_binarization is not None and bool(right_gripper_binarization.get("enabled", False)):
+        print(
+            "Right gripper binarization: "
+            f"close_below={right_gripper_binarization.get('close_below')}, "
+            "1.0=closed, 0.0=open"
+        )
 
     if output_path.exists():
         if not args.overwrite:
@@ -277,6 +301,7 @@ def convert(args: DictConfig) -> Path:
         with h5py.File(path, "r") as episode:
             qpos = episode["/observations/qpos"]
             action = state2action(episode["/action"][()])
+            action = binarize_right_gripper_actions(action, right_gripper_binarization)
             num_frames = qpos.shape[0]
             for i in range(num_frames):
                 try:

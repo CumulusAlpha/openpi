@@ -28,6 +28,13 @@ no_videos: True
 overwrite: True
 max_episodes: null
 
+# Binarize the right gripper action before writing LeRobot data. Raw ARX
+# gripper action is a width: larger is more open, smaller is more closed.
+# The written action[13] is 1.0 for closed and 0.0 for open.
+right_gripper_binarization:
+  enabled: True
+  close_below: 0.079
+
 # LeRobot writer options.
 tolerance_s: 1.0e-4
 image_writer_processes: 8
