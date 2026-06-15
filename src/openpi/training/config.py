@@ -873,7 +873,6 @@ _CONFIGS = [
             action_expert_variant="gemma_300m_lora",
             action_horizon=50,
         ).get_freeze_filter(),
-        ema_decay=None,
     ),
     #
     # Fine-tuning DROID configs.

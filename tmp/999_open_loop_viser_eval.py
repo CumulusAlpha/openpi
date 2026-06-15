@@ -169,6 +169,19 @@ class ViserOpenLoopView:
         self.server = viser.ViserServer(host=host, port=port)
         self.urdfs = {}
         self.fingers = {}
+        self.ground = self.server.scene.add_grid(
+            "/ground",
+            width=4.0,
+            height=4.0,
+            plane="xy",
+            cell_size=0.1,
+            section_size=0.5,
+            cell_color=(210, 210, 210),
+            section_color=(145, 145, 145),
+            plane_color=(245, 245, 245),
+            plane_opacity=0.35,
+            shadow_opacity=0.18,
+        )
         roots = {
             "pred_left": ("/pred_left_x5", (0.0, 0.35, 0.0), (0.55, 0.55, 0.55, 0.28)),
             "pred_right": ("/pred_right_x5", (0.0, -0.35, 0.0), (0.55, 0.55, 0.55, 0.28)),
@@ -361,7 +374,7 @@ def main() -> None:
             ref = np.asarray(row["action" if args.show_gt_action else "observation.state"], dtype=np.float32)
             gt_action = np.asarray(row["action"], dtype=np.float32)
             state = np.asarray(row["observation.state"], dtype=np.float32)
-            err = float("nan") if pred_action is None else float(np.linalg.norm(pred_action - gt_action))
+            ehttps://wandb.ai/cumulusalpha/openpi/runs/fz75c1aarr = float("nan") if pred_action is None else float(np.linalg.norm(pred_action - gt_action))
             chunk_left = 0 if action_chunk is None else len(action_chunk) - offset - 1
             chunk_offset_text = str(offset) if action_chunk is not None else "none"
             ref_label = "recorded action" if args.show_gt_action else "recorded state"
