@@ -36,6 +36,12 @@ ACTION_LPF_ALPHA = 0.35
 MAX_JOINT_STEP = 0.025
 MAX_GRIPPER_STEP = 0.003
 
+RIGHT_GRIPPER_BINARY_ACTION = True
+RIGHT_GRIPPER_BINARY_DIM = 13
+RIGHT_GRIPPER_BINARY_THRESHOLD = 0.5
+RIGHT_GRIPPER_OPEN_WIDTH = 0.082
+RIGHT_GRIPPER_CLOSED_WIDTH = 0.060
+
 TASK = "Complete_chemical_reaction_experiment"
 
 DELAY = 0 # 强制控制推理延迟
@@ -124,6 +130,7 @@ class DualArmCollector:
         action = np.asarray(action, dtype=np.float64).reshape(-1)
         if action.shape[0] != 14:
             raise ValueError(f"ARX action should have 14 values, got shape {action.shape}")
+        action = self._map_binary_right_gripper_action(action)
         if self.last_commanded_action is None:
             qpos, _, _, _ = self.robot_operator.read_arms()
             self.last_commanded_action = qpos.astype(np.float64)
@@ -142,6 +149,19 @@ class DualArmCollector:
             action = clipped_action
         self.last_commanded_action = action.copy()
         self.robot_operator.command_arms(action, command_delay=1.0 / FPS)
+
+    def _map_binary_right_gripper_action(self, action):
+        if not RIGHT_GRIPPER_BINARY_ACTION:
+            return action
+
+        action = action.copy()
+        close_score = float(action[RIGHT_GRIPPER_BINARY_DIM])
+        action[RIGHT_GRIPPER_BINARY_DIM] = (
+            RIGHT_GRIPPER_CLOSED_WIDTH
+            if close_score > RIGHT_GRIPPER_BINARY_THRESHOLD
+            else RIGHT_GRIPPER_OPEN_WIDTH
+        )
+        return action
 
     def go_home(self):
         self.robot_operator.reset_to_home()
