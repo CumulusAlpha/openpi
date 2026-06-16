@@ -560,9 +560,6 @@ class TrainConfig:
 
     # If true, will enable wandb logging.
     wandb_enabled: bool = True
-    # If true, log camera preview images to wandb at step 0. Disabled by default because host transfers from
-    # sharded JAX image batches can be unstable on some CUDA/JAX setups.
-    log_camera_views: bool = False
 
     # Used to pass metadata to the policy server.
     policy_metadata: dict[str, Any] | None = None
