@@ -1,21 +1,24 @@
 # @package _global_
 
 # Hydra config for utils/convert_act_hdf5_to_lerobot.py.
-# Field names match the argparse Namespace used by convert(args).
+# Field names match the Hydra config used by convert(args).
 
 # Input ACT/Aloha HDF5 directory. The script looks for episode_*.hdf5 here.
-raw_dir: /data/sy/project/openpi/logs/datasets
+input_path: datasets/tube/hdf5
 
 # LeRobot output identity and location.
-repo_id: local/act_aloha
-root: /data/sy/project/openpi/data/apple
+repo_id: local/tube
+output_path: datasets/tube/parquet
 robot_type: arx5
 
 # Dataset metadata.
 # fps is only used when the first HDF5 file does not define attrs["frame_rate"].
 fps: 50.0
-task: null
-default_task: "Put the apple in the bowl."
+# task overrides the language instruction written to every converted frame.
+# If task is null, the converter uses the HDF5 attrs["task"] value when present.
+# default_task is the fallback language instruction when both of those are empty.
+task: "Move a test tube from one tube rack to another tube rack."
+default_task: null
 
 # Raw HDF5 image dataset key -> LeRobot feature key.
 # These entries are parsed as "raw_key=lerobot_key".

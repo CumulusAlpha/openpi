@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Convert ACT/Aloha-style HDF5 episodes to a LeRobot dataset.
 
-Default input layout expected by this script:
+Input layout expected by this script:
 
-    /home/arx/act/datasets/episode_0.hdf5
-    /home/arx/act/datasets/episode_1.hdf5
+    <input_path>/episode_0.hdf5
+    <input_path>/episode_1.hdf5
     ...
 
 Each HDF5 file is expected to contain:
@@ -17,7 +17,8 @@ Each HDF5 file is expected to contain:
 Example:
 
     .venv/bin/python utils/convert_act_hdf5_to_lerobot.py \
-        raw_dir=/home/arx/act/datasets \
+        input_path=/path/to/episodes \
+        output_path=data/apple \
         repo_id=local/act_aloha \
         task="put the object into the container"
 """
@@ -41,6 +42,8 @@ from lerobot.common.datasets.lerobot_dataset import hf_transform_to_torch
 import numpy as np
 from omegaconf import DictConfig
 import tqdm
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 DEFAULT_IMAGE_MAP = {
     "middle_image": "observation.images.top",
@@ -102,6 +105,31 @@ def find_hdf5_files(raw_dir: Path) -> list[Path]:
     if not files:
         raise FileNotFoundError(f"No episode_*.hdf5 files found under {raw_dir}")
     return files
+
+
+def resolve_repo_path(value: str | Path) -> Path:
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = REPO_ROOT / path
+    return path
+
+
+def get_input_path(args: DictConfig) -> Path:
+    input_path = args.get("input_path", None)
+    if input_path is None:
+        input_path = args.get("raw_dir", None)
+    if input_path is None:
+        raise ValueError("Set input_path in config/dataset/convert_act_hdf5_to_lerobot.yaml")
+    return resolve_repo_path(input_path)
+
+
+def get_output_path(args: DictConfig) -> Path:
+    output_path = args.get("output_path", None)
+    if output_path is None:
+        output_path = args.get("root", None)
+    if output_path:
+        return resolve_repo_path(output_path)
+    return HF_LEROBOT_HOME / args.repo_id
 
 
 def decode_image(value: np.ndarray) -> np.ndarray:
@@ -238,12 +266,11 @@ def binarize_right_gripper_actions(actions: np.ndarray, cfg: DictConfig | None) 
 
 
 def convert(args: DictConfig) -> Path:
-    raw_dir = Path(args.raw_dir).expanduser()
-    root = Path(args.root).expanduser() if args.root else HF_LEROBOT_HOME / args.repo_id
-    output_path = root
+    input_path = get_input_path(args)
+    output_path = get_output_path(args)
     image_map = parse_image_map(args.image_map)
     right_gripper_binarization = args.get("right_gripper_binarization")
-    hdf5_files = find_hdf5_files(raw_dir)
+    hdf5_files = find_hdf5_files(input_path)
     if args.max_episodes is not None:
         hdf5_files = hdf5_files[: args.max_episodes]
 
@@ -260,7 +287,7 @@ def convert(args: DictConfig) -> Path:
     for path in hdf5_files[1:]:
         validate_episode(path, image_map, state_dim, action_dim)
 
-    print(f"Found {len(hdf5_files)} episodes under {raw_dir}")
+    print(f"Found {len(hdf5_files)} episodes under {input_path}")
     print(f"FPS: {fps}")
     print(f"Task: {task!r}")
     print(f"State dim: {state_dim}, action dim: {action_dim}")
@@ -286,7 +313,7 @@ def convert(args: DictConfig) -> Path:
 
     dataset = LeRobotDataset.create(
         repo_id=args.repo_id,
-        root=root,
+        root=output_path,
         fps=fps,
         robot_type=args.robot_type,
         features=features,

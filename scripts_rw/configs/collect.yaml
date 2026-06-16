@@ -1,0 +1,59 @@
+defaults:
+  - _self_
+
+# Dataset configuration
+datasets: datasets/xxx/hdf5
+episode_idx: -1
+max_timesteps: 10000
+frame_rate: 50
+obs_ratio: 0.8
+
+# Image options
+# camera_names: ['left', 'middle', 'right']
+camera_names: ['middle', 'right']
+
+use_depth_image: false
+# realsense_serials: null
+realsense_serials:
+  left: "260322275038"
+  middle: "260322276842"
+  right: "260322272800"
+
+realsense_width: 640
+realsense_height: 480
+realsense_fps: 90
+realsense_warmup_frames: 30
+realsense_wait_timeout_ms: 1000
+realsense_align_to_color: true
+realsense_verbose: true
+
+# Viser visualization
+viser_update: false
+viser_urdf_path: assets/X5.urdf
+
+# Robot options
+use_base: false
+record: Distance
+
+# Collection controls
+key_collect: false
+home_after_next: false
+gripper_open_duration: 1.5
+gripper_open_settle: 0.2
+gripper_open_target: null
+task: ""
+
+# ARX5 SDK / CAN options
+left_model: X5
+right_model: X5
+left_interface: can0
+right_interface: can1
+button_interface: can6
+button_can_id: 0x721
+
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: .
+  output_subdir: null

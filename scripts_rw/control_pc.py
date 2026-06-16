@@ -21,6 +21,7 @@ for path in (
 
 from openpi_client import image_tools
 
+from utils.button import CanButtonReader
 from utils.realsense_cam import RealSenseManager
 
 
@@ -51,6 +52,13 @@ LEFT_MODEL = "X5"
 RIGHT_MODEL = "X5"
 LEFT_INTERFACE = "can0"
 RIGHT_INTERFACE = "can1"
+BUTTON_INTERFACE = "can6"
+BUTTON_CAN_ID = 0x721
+
+# CanButtonReader reports zero-based indices. These are physical buttons 1, 2, 3.
+BUTTON_HOME = 0
+BUTTON_START_INFERENCE = 1
+BUTTON_STOP_INFERENCE = 2
 
 CAMERA_NAMES = ["left", "middle", "right"]
 REALSENSE_SERIALS = {
@@ -229,23 +237,52 @@ class AsyncInferenceManager:
 
 
     def start(self):
+        if self.is_running:
+            print("推理已经在运行")
+            return
+
         self.is_running = True
+        self.is_inferencing = False
         self.t = 0
         self.A_cur = None
         self.o_cur = None
+        self.chunk_prev = None
+        self.chunk_cur = None
+        self.delay_queue.clear()
+        self.delay_queue.append(5)
+        self.inference_trigger.clear()
+        self.controller.last_commanded_action = None
         
         # 启动推理线程
         self.inference_thread = threading.Thread(target=self._inference_loop, daemon=True)
         self.inference_thread.start()
         
         # 首次推理
-        self._run_inference_once()
+        with self.action_lock:
+            self.o_cur = self.controller.get_observation()
+            self.is_inferencing = True
+        self.inference_trigger.set()
 
     def stop(self):
+        if not self.is_running and self.inference_thread is None:
+            return
+
         self.is_running = False
+        with self.action_lock:
+            self.is_inferencing = False
         self.inference_trigger.set()
-        if self.inference_thread:
+        if self.inference_thread and self.inference_thread.is_alive():
             self.inference_thread.join()
+        self.inference_thread = None
+        self.inference_trigger.clear()
+        with self.action_lock:
+            self.t = 0
+            self.A_cur = None
+            self.o_cur = None
+            self.chunk_prev = None
+            self.chunk_cur = None
+            self.is_inferencing = False
+        self.controller.last_commanded_action = None
 
     def _inference_loop(self):
         while self.is_running:
@@ -263,6 +300,11 @@ class AsyncInferenceManager:
                 A_new = self._run_guided_inference(o, s)
             except Exception:
                 traceback.print_exc()
+                with self.action_lock:
+                    self.is_inferencing = False
+                continue
+
+            if not self.is_running:
                 with self.action_lock:
                     self.is_inferencing = False
                 continue
@@ -325,20 +367,42 @@ class AsyncInferenceManager:
 
     def get_next_action(self):
         with self.action_lock:
+            if not self.is_running:
+                return None
+
+            if self.A_cur is None:
+                return None
+
             self.t += 1
             self.o_cur = self.controller.get_observation()
-            if self.A_cur is not None:
-                if self.t >= self.s_min and not self.is_inferencing:
-                    self.is_inferencing = True
-                    self.inference_trigger.set()
+            if self.t >= self.s_min and not self.is_inferencing:
+                self.is_inferencing = True
+                self.inference_trigger.set()
             
             # 返回当前动作
-            if self.A_cur is None or self.t >= len(self.A_cur):
+            if self.t >= len(self.A_cur):
                 print(f"动作不足 (t={self.t}, A_cur长度={len(self.A_cur) if self.A_cur else 0})")
                 return None 
             action = self.A_cur[self.t - 1]
         
         return action
+
+
+def handle_button_events(button_reader, async_manager, arx_controller):
+    triggered = button_reader.poll_events()
+
+    if BUTTON_HOME in triggered:
+        print("[button 1] home")
+        async_manager.stop()
+        arx_controller.go_home()
+
+    if BUTTON_START_INFERENCE in triggered:
+        print("[button 2] start inference")
+        async_manager.start()
+
+    if BUTTON_STOP_INFERENCE in triggered:
+        print("[button 3] stop inference")
+        async_manager.stop()
 
 
 def main():
@@ -347,26 +411,36 @@ def main():
     except ImportError as exc:
         raise ImportError("openpi_client.websocket_client_policy requires `websockets`. Run dependency sync/install first.") from exc
 
-    print("初始化 ARX 机械臂控制器...")
-    arx_controller = DualArmCollector()
-    time.sleep(2)
-    print("✓ ARX initialized")
-
-    arx_controller.go_home()
-    time.sleep(0.5)
-    
-    client = _websocket_client_policy.WebsocketClientPolicy(
-        host=HOST, 
-        port=PORT,
-    )
-    async_manager = AsyncInferenceManager(client, arx_controller, s_min=S_MIN)
+    arx_controller = None
+    async_manager = None
+    button_reader = None
     all_actions = []
     
     try:
-        async_manager.start()
+        print("初始化 ARX 机械臂控制器...")
+        arx_controller = DualArmCollector()
+        time.sleep(2)
+        print("✓ ARX initialized")
+
+        button_reader = CanButtonReader(BUTTON_INTERFACE, BUTTON_CAN_ID)
+
+        arx_controller.go_home()
+        time.sleep(0.5)
+        
+        client = _websocket_client_policy.WebsocketClientPolicy(
+            host=HOST, 
+            port=PORT,
+        )
+        async_manager = AsyncInferenceManager(client, arx_controller, s_min=S_MIN)
+        print("等待按钮输入: button 1=home, button 2=start inference, button 3=stop inference")
         
         while True:
             loop_start_t = time.perf_counter()
+            handle_button_events(button_reader, async_manager, arx_controller)
+            if not async_manager.is_running:
+                time.sleep(0.02)
+                continue
+
             action = async_manager.get_next_action()
             if action is None:
                 print("等待动作生成中...")
@@ -386,8 +460,12 @@ def main():
     except KeyboardInterrupt:
         print("\n停止运行")
     finally:
-        async_manager.stop()
-        arx_controller.close()
+        if async_manager is not None:
+            async_manager.stop()
+        if button_reader is not None:
+            button_reader.close()
+        if arx_controller is not None:
+            arx_controller.close()
 
 if __name__ == "__main__":
     main()

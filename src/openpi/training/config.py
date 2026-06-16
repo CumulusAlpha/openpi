@@ -1036,3 +1036,10 @@ def get_config(config_name: str) -> TrainConfig:
         raise ValueError(f"Config '{config_name}' not found.{closest_str}")
 
     return _CONFIGS_DICT[config_name]
+
+
+def with_repo_id(config: TrainConfig, repo_id: str | None) -> TrainConfig:
+    """Return a config with data.repo_id overridden when provided."""
+    if repo_id is None:
+        return config
+    return dataclasses.replace(config, data=dataclasses.replace(config.data, repo_id=repo_id))
