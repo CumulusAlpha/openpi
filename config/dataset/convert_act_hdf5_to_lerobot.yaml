@@ -28,7 +28,7 @@ image_map:
 
 # Conversion behavior.
 no_videos: True
-overwrite: True
+overwrite: False
 max_episodes: null
 
 # Binarize the right gripper action before writing LeRobot data. Raw ARX

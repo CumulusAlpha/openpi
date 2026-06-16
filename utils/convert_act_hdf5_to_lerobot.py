@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 import shutil
+import uuid
 
 import cv2
 import datasets
@@ -130,6 +131,44 @@ def get_output_path(args: DictConfig) -> Path:
     if output_path:
         return resolve_repo_path(output_path)
     return HF_LEROBOT_HOME / args.repo_id
+
+
+def looks_like_lerobot_dataset(path: Path) -> bool:
+    if not path.exists() or not path.is_dir():
+        return False
+    return (path / "meta" / "info.json").exists() and (path / "meta" / "tasks.jsonl").exists()
+
+
+def validate_output_path(input_path: Path, output_path: Path, overwrite: bool) -> None:
+    input_path = input_path.resolve()
+    output_path = output_path.resolve()
+
+    if input_path == output_path:
+        raise ValueError(f"input_path and output_path must be different: {input_path}")
+    if input_path.is_relative_to(output_path):
+        raise ValueError(
+            "output_path must not contain input_path. "
+            f"Overwriting {output_path} could delete raw HDF5 files under {input_path}."
+        )
+    if output_path.is_relative_to(input_path):
+        raise ValueError(
+            "output_path must not be inside input_path. "
+            f"Keep raw HDF5 input ({input_path}) and converted output ({output_path}) in sibling folders."
+        )
+
+    if not output_path.exists():
+        return
+    if not overwrite:
+        raise FileExistsError(f"{output_path} already exists. Set overwrite=true to regenerate it.")
+    if any(output_path.iterdir()) and not looks_like_lerobot_dataset(output_path):
+        raise ValueError(
+            f"Refusing to overwrite non-LeRobot output directory: {output_path}. "
+            "Choose an empty/new output_path or remove the directory manually."
+        )
+
+
+def make_temp_output_path(output_path: Path) -> Path:
+    return output_path.parent / f".tmp_{output_path.name}_convert_{uuid.uuid4().hex[:8]}"
 
 
 def decode_image(value: np.ndarray) -> np.ndarray:
@@ -268,6 +307,8 @@ def binarize_right_gripper_actions(actions: np.ndarray, cfg: DictConfig | None) 
 def convert(args: DictConfig) -> Path:
     input_path = get_input_path(args)
     output_path = get_output_path(args)
+    validate_output_path(input_path, output_path, bool(args.overwrite))
+    write_output_path = make_temp_output_path(output_path)
     image_map = parse_image_map(args.image_map)
     right_gripper_binarization = args.get("right_gripper_binarization")
     hdf5_files = find_hdf5_files(input_path)
@@ -300,10 +341,6 @@ def convert(args: DictConfig) -> Path:
             "1.0=closed, 0.0=open"
         )
 
-    if output_path.exists():
-        if not args.overwrite:
-            raise FileExistsError(f"{output_path} already exists. Set overwrite=true to replace it.")
-        shutil.rmtree(output_path)
     features = make_features(
         image_map=image_map,
         image_shapes=first_info.image_shapes,
@@ -311,47 +348,62 @@ def convert(args: DictConfig) -> Path:
         action_dim=action_dim,
     )
 
-    dataset = LeRobotDataset.create(
-        repo_id=args.repo_id,
-        root=output_path,
-        fps=fps,
-        robot_type=args.robot_type,
-        features=features,
-        use_videos=not args.no_videos,
-        tolerance_s=args.tolerance_s,
-        image_writer_processes=args.image_writer_processes,
-        image_writer_threads=args.image_writer_threads,
-        video_backend=args.video_backend,
-    )
+    if write_output_path.exists():
+        shutil.rmtree(write_output_path)
 
-    for path in tqdm.tqdm(hdf5_files, desc="episodes"):
-        with h5py.File(path, "r") as episode:
-            qpos = episode["/observations/qpos"]
-            action = state2action(episode["/action"][()])
-            action = binarize_right_gripper_actions(action, right_gripper_binarization)
-            num_frames = qpos.shape[0]
-            for i in range(num_frames):
-                try:
-                    frame = {
-                        "observation.state": qpos[i].astype(np.float32),
-                        "action": action[i].astype(np.float32),
-                        "task": task,
-                    }
+    try:
+        dataset = LeRobotDataset.create(
+            repo_id=args.repo_id,
+            root=write_output_path,
+            fps=fps,
+            robot_type=args.robot_type,
+            features=features,
+            use_videos=not args.no_videos,
+            tolerance_s=args.tolerance_s,
+            image_writer_processes=args.image_writer_processes,
+            image_writer_threads=args.image_writer_threads,
+            video_backend=args.video_backend,
+        )
 
-                    for raw_key, lerobot_key in image_map.items():
-                        try:
-                            frame[lerobot_key] = decode_image(episode[f"/observations/{raw_key}"][i])
-                        except Exception as exc:
-                            raise RuntimeError(f"Failed to decode image in {path} at frame {i}, camera {raw_key}") from exc
+        for path in tqdm.tqdm(hdf5_files, desc="episodes"):
+            with h5py.File(path, "r") as episode:
+                qpos = episode["/observations/qpos"]
+                action = state2action(episode["/action"][()])
+                action = binarize_right_gripper_actions(action, right_gripper_binarization)
+                num_frames = qpos.shape[0]
+                for i in range(num_frames):
+                    try:
+                        frame = {
+                            "observation.state": qpos[i].astype(np.float32),
+                            "action": action[i].astype(np.float32),
+                            "task": task,
+                        }
 
-                    dataset.add_frame(frame)
-                except Exception as exc:
-                    raise RuntimeError(f"Failed while converting {path} at frame {i}") from exc
+                        for raw_key, lerobot_key in image_map.items():
+                            try:
+                                frame[lerobot_key] = decode_image(episode[f"/observations/{raw_key}"][i])
+                            except Exception as exc:
+                                raise RuntimeError(
+                                    f"Failed to decode image in {path} at frame {i}, camera {raw_key}"
+                                ) from exc
 
-        dataset.save_episode()
+                        dataset.add_frame(frame)
+                    except Exception as exc:
+                        raise RuntimeError(f"Failed while converting {path} at frame {i}") from exc
 
-    if hasattr(dataset, "consolidate"):
-        dataset.consolidate()
+            dataset.save_episode()
+
+        if hasattr(dataset, "consolidate"):
+            dataset.consolidate()
+
+        if output_path.exists():
+            shutil.rmtree(output_path)
+        write_output_path.rename(output_path)
+    except Exception:
+        if write_output_path.exists():
+            shutil.rmtree(write_output_path)
+        raise
+
     print(f"Saved LeRobot dataset to: {output_path}")
     return output_path
 

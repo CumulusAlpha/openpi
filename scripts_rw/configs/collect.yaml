@@ -2,7 +2,7 @@ defaults:
   - _self_
 
 # Dataset configuration
-datasets: datasets/xxx/hdf5
+datasets: datasets/tube/hdf5
 episode_idx: -1
 max_timesteps: 10000
 frame_rate: 50

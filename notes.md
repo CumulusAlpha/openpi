@@ -10,7 +10,7 @@ python scripts_rw/collect.py
 
 Config: `scripts_rw/configs/collect.yaml`
 Output: `<datasets>/episode_N.hdf5`, where `<datasets>` is the YAML `datasets:` field.
-Current config value: `datasets/xxx/hdf5`
+Current config value: `datasets/tube/hdf5`
 
 Convert HDF5 to LeRobot:
 
@@ -21,6 +21,8 @@ python utils/convert_act_hdf5_to_lerobot.py
 Config: `config/dataset/convert_act_hdf5_to_lerobot.yaml`
 Input: `input_path`, currently `datasets/tube/hdf5`
 Output: `output_path`, currently `datasets/tube/parquet`
+Default behavior: non-destructive. If output already exists, conversion stops.
+To intentionally regenerate output, run `python utils/convert_act_hdf5_to_lerobot.py overwrite=true`.
 
 Compute norm stats:
 
@@ -106,7 +108,7 @@ Collected episodes are saved as HDF5 files:
 Current config value:
 
 ```yaml
-datasets: datasets/xxx/hdf5
+datasets: datasets/tube/hdf5
 ```
 
 If using the tube dataset folder layout, put or collect the raw HDF5 files under:
@@ -147,6 +149,21 @@ Expected result:
 ```text
 datasets/tube/parquet/
 ```
+
+The converter is non-destructive by default:
+
+```yaml
+overwrite: False
+```
+
+If `datasets/tube/parquet` already exists, the command stops before writing. To intentionally regenerate it:
+
+```bash
+python utils/convert_act_hdf5_to_lerobot.py overwrite=true
+```
+
+Regeneration is guarded: the converter refuses to use the same folder for input and output, refuses nested
+input/output paths, and writes to a temporary sibling folder before replacing the final output.
 
 ## 3. Update Training Config
 
