@@ -32,6 +32,42 @@ import openpi.transforms as _transforms
 ModelType: TypeAlias = _model.ModelType
 # Work around a tyro issue with using nnx.filterlib.Filter directly.
 Filter: TypeAlias = nnx.filterlib.Filter
+_REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
+
+
+def resolve_local_repo_id(repo_id: str | None) -> str | None:
+    """Resolve local LeRobot dataset paths while leaving Hugging Face repo IDs unchanged."""
+    if repo_id is None:
+        return None
+
+    path = pathlib.Path(repo_id).expanduser()
+    if path.is_absolute():
+        return str(path.resolve())
+
+    repo_path = (_REPO_ROOT / path).resolve()
+    if repo_path.exists():
+        return str(repo_path)
+
+    if path.exists():
+        return str(path.resolve())
+
+    return repo_id
+
+
+def asset_id_from_repo_id(repo_id: str | None) -> str | None:
+    """Return a checkpoint-safe asset id for a dataset repo id or local path."""
+    if repo_id is None:
+        return None
+
+    path = pathlib.Path(repo_id).expanduser()
+    if not path.is_absolute():
+        return path.as_posix()
+
+    resolved = path.resolve()
+    try:
+        return resolved.relative_to(_REPO_ROOT).as_posix()
+    except ValueError:
+        return resolved.as_posix().lstrip("/")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -178,10 +214,10 @@ class DataConfigFactory(abc.ABC):
 
     def create_base_config(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
         repo_id = self.repo_id if self.repo_id is not tyro.MISSING else None
-        asset_id = self.assets.asset_id or repo_id
+        asset_id = self.assets.asset_id or asset_id_from_repo_id(repo_id)
         return dataclasses.replace(
             self.base_config or DataConfig(),
-            repo_id=repo_id,
+            repo_id=resolve_local_repo_id(repo_id),
             asset_id=asset_id,
             norm_stats=self._load_norm_stats(epath.Path(self.assets.assets_dir or assets_dirs), asset_id),
             use_quantile_norm=model_config.model_type != ModelType.PI0,
@@ -834,10 +870,10 @@ _CONFIGS = [
             action_horizon=50,
         ),
         data=LeRobotAlohaDataConfig(
-            repo_id="/data/sy/project/openpi/data/apple",
+            repo_id="datasets/apple/parquet",
             use_delta_joint_actions=True,
-            default_prompt="pick up the apple and put it in the white bowl",
             adapt_to_pi=False,
+            base_config=DataConfig(prompt_from_task=True),
             repack_transforms=_transforms.Group(
                 inputs=[
                     _transforms.RepackTransform(
@@ -848,6 +884,7 @@ _CONFIGS = [
                             },
                             "state": "observation.state",
                             "actions": "action",
+                            "prompt": "prompt",
                         }
                     )
                 ]

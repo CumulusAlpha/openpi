@@ -34,7 +34,8 @@ python scripts/compute_norm_stats.py \
 
 Config: `src/openpi/training/config.py`, config name `pi0_arx_lora_chunk50_delta`
 Input: `--repo-id`, here `datasets/tube/parquet`. If omitted, it falls back to `data.repo_id` in config.py.
-Output: `config.assets_dirs / data_config.repo_id`. Exact save line: `scripts/compute_norm_stats.py:111`
+Output: `config.assets_dirs / data_config.asset_id`. Exact save line: `scripts/compute_norm_stats.py:192`
+Post-process: replaces joint dims `0:6,7:13` with official ARX stats; grippers and other dims stay computed from this dataset.
 
 Train:
 
@@ -189,16 +190,16 @@ python scripts/train.py pi0_arx_lora_chunk50_delta \
   --overwrite
 ```
 
-Current hardcoded defaults in `config.py` are only fallbacks if no command override is passed:
+Current defaults in `config.py` are only fallbacks if no command override is passed:
 
 ```python
-repo_id="/data/sy/project/openpi/data/apple"
-default_prompt="pick up the apple and put it in the white bowl"
+repo_id="datasets/apple/parquet"
+base_config=DataConfig(prompt_from_task=True)
 ```
 
 Do not pass `--data.default-prompt` for the tube dataset unless the converted dataset is missing task text.
 The converter writes the instruction from `task:` in `config/dataset/convert_act_hdf5_to_lerobot.yaml`
-into the LeRobot dataset, and that task should be used during training.
+into the LeRobot dataset, and `prompt_from_task=True` makes training use that task.
 
 ## 4. Compute Norm Stats
 
@@ -215,6 +216,30 @@ The input dataset is not from `config/dataset/convert_act_hdf5_to_lerobot.yaml`.
 It comes from `--repo-id`. If `--repo-id` is omitted, it falls back to the training config selected by
 `--config-name`.
 
+After computing stats from the dataset, the script replaces only ARX joint dimensions with official ARX stats:
+
+```text
+joint dims: 0,1,2,3,4,5,7,8,9,10,11,12
+kept from dataset: left/right grippers at 6 and 13, plus any other dims
+```
+
+Default official source:
+
+```text
+assets/arx/
+```
+
+This file is tracked in the repo as `assets/arx/norm_stats.json`.
+
+To disable this post-process and save fully dataset-computed stats:
+
+```bash
+python scripts/compute_norm_stats.py \
+  --config-name pi0_arx_lora_chunk50_delta \
+  --repo-id datasets/tube/parquet \
+  --official-joint-stats-dir None
+```
+
 Exact code path:
 
 ```python
@@ -222,15 +247,23 @@ Exact code path:
 config = _config.with_repo_id(_config.get_config(config_name), repo_id)
 data_config = config.data.create(config.assets_dirs, config.model)
 
+# scripts/compute_norm_stats.py:183-188
+norm_stats = {key: stats.get_statistics() for key, stats in stats.items()}
+norm_stats = replace_joints_with_official_stats(norm_stats, official_joint_stats_dir, indices)
+
 # src/openpi/training/config.py, current ARX fallback
-repo_id="/data/sy/project/openpi/data/apple"
+repo_id="datasets/apple/parquet"
+base_config=DataConfig(prompt_from_task=True)
 ```
+
+For local paths, `data_config.repo_id` resolves to the absolute LeRobot dataset path used by LeRobot, while
+`data_config.asset_id` remains a checkpoint-safe relative id such as `datasets/tube/parquet`.
 
 The output path is also explicit in the script:
 
 ```python
-# scripts/compute_norm_stats.py:111-113
-output_path = config.assets_dirs / data_config.repo_id
+# scripts/compute_norm_stats.py:190-192
+output_path = config.assets_dirs / data_config.asset_id
 print(f"Writing stats to: {output_path}")
 normalize.save(output_path, norm_stats)
 ```
@@ -245,16 +278,19 @@ return (pathlib.Path(self.assets_base_dir) / self.name).resolve()
 So the output path is:
 
 ```text
-assets/<config_name>/<data.repo_id>/
+assets/<config_name>/<data_config.asset_id>/
 ```
 
-For example, if `data.repo_id` is `datasets/tube/parquet`, stats are written under:
+For example, if `data_config.asset_id` is `datasets/tube/parquet`, stats are written under:
 
 ```text
 assets/pi0_arx_lora_chunk50_delta/datasets/tube/parquet/
 ```
 
-It does not save into the dataset itself. In this repo, norm stats are treated as training/config assets, then copied into checkpoints during checkpoint saving. That keeps the converted LeRobot dataset separate from model-specific preprocessing stats.
+It does not save into the dataset itself. For example, the apple LeRobot dataset is under `datasets/apple/parquet`,
+but its OpenPI training norm stats are separate assets. In this repo, norm stats are treated as training/config assets,
+then copied into checkpoints during checkpoint saving. That keeps the converted LeRobot dataset separate from
+model-specific preprocessing stats.
 
 ## 5. Train
 
