@@ -70,6 +70,38 @@ def init_wandb(config: _config.TrainConfig, *, resuming: bool, log_code: bool = 
         wandb.run.log_code(epath.Path(__file__).parent.parent)
 
 
+def _image_to_wandb_array(image: Any) -> np.ndarray:
+    if hasattr(image, "detach"):
+        image = image.detach().cpu().numpy()
+    else:
+        image = np.asarray(image)
+
+    if image.ndim == 3 and image.shape[0] in (1, 3, 4) and image.shape[-1] not in (1, 3, 4):
+        image = np.moveaxis(image, 0, -1)
+
+    if np.issubdtype(image.dtype, np.floating):
+        if image.size and image.min() < 0:
+            image = image / 2.0 + 0.5
+        image = np.clip(image, 0.0, 1.0)
+    return image
+
+
+def maybe_log_camera_views(config: _config.TrainConfig) -> None:
+    if not config.wandb_enabled or not config.log_camera_views:
+        return
+
+    sample_loader = _data_loader.create_data_loader(config, shuffle=False, framework="pytorch")
+    observation, _ = next(iter(sample_loader))
+    images = observation.images
+    batch_size = next(iter(images.values())).shape[0]
+    images_to_log = []
+    for i in range(min(5, batch_size)):
+        images_to_log.append(
+            wandb.Image(np.concatenate([_image_to_wandb_array(img[i]) for img in images.values()], axis=1))
+        )
+    wandb.log({"camera_views": images_to_log}, step=0)
+
+
 def _load_weights_and_validate(loader: _weight_loaders.WeightLoader, params_shape: at.Params) -> at.Params:
     """Loads and validates the weights. Returns a loaded subset of the weights."""
     loaded_params = loader.load(params_shape)
@@ -225,13 +257,7 @@ def main(config: _config.TrainConfig):
     data_iter = iter(data_loader)
     batch = next(data_iter)
     logging.info(f"Initialized data loader:\n{training_utils.array_tree_to_info(batch)}")
-
-    # Log images from first batch to sanity check.
-    images_to_log = [
-        wandb.Image(np.concatenate([np.array(img[i]) for img in batch[0].images.values()], axis=1))
-        for i in range(min(5, len(next(iter(batch[0].images.values())))))
-    ]
-    wandb.log({"camera_views": images_to_log}, step=0)
+    maybe_log_camera_views(config)
 
     train_state, train_state_sharding = init_train_state(config, init_rng, mesh, resume=resuming)
     jax.block_until_ready(train_state)
