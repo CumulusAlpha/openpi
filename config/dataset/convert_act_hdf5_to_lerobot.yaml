@@ -1,48 +1,29 @@
 # @package _global_
 
 # Hydra config for utils/convert_act_hdf5_to_lerobot.py.
-# Field names match the Hydra config used by convert(args).
+# Select a dataset-specific config with, for example:
+#   uv run python utils/convert_act_hdf5_to_lerobot.py dataset=tube overwrite=true
+#   uv run python utils/convert_act_hdf5_to_lerobot.py dataset=apple overwrite=true
 
-# Input ACT/Aloha HDF5 directory. The script looks for episode_*.hdf5 here.
-input_path: datasets/tube/hdf5
+defaults:
+  - dataset: tube
+  - _self_
 
-# LeRobot output identity and location.
-repo_id: local/tube
-output_path: datasets/tube/parquet
-robot_type: arx5
-
-# Dataset metadata.
-# fps is only used when the first HDF5 file does not define attrs["frame_rate"].
-fps: 50.0
-# task overrides the language instruction written to every converted frame.
-# If task is null, the converter uses the HDF5 attrs["task"] value when present.
-# default_task is the fallback language instruction when both of those are empty.
-task: "Move a test tube from one tube rack to another tube rack."
-default_task: null
-
-# Raw HDF5 image dataset key -> LeRobot feature key.
-# These entries are parsed as "raw_key=lerobot_key".
-image_map:
-  - middle_image=observation.images.top
-  - right_image=observation.images.right_wrist
-
-# Conversion behavior.
+# Conversion behavior shared by all ACT/Aloha HDF5 datasets.
 no_videos: True
 overwrite: False
 max_episodes: null
-
-# Binarize the right gripper action before writing LeRobot data. Raw ARX
-# gripper action is a width: larger is more open, smaller is more closed.
-# The written action[13] is 1.0 for closed and 0.0 for open.
-right_gripper_binarization:
-  enabled: True
-  close_below: 0.079
 
 # LeRobot writer options.
 tolerance_s: 1.0e-4
 image_writer_processes: 8
 image_writer_threads: 8
 video_backend: null
+
+# Raw HDF5 gripper action is a width: larger is more open, smaller is more
+# closed. The converter writes action[13] as 1.0 for closed and 0.0 for open.
+right_gripper_binarization:
+  enabled: True
 
 # Optional Hydra runtime settings if this file is used as the primary config.
 hydra:

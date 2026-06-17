@@ -1,0 +1,21 @@
+# @package _global_
+
+input_path: datasets/apple/hdf5
+repo_id: local/apple
+output_path: datasets/apple/parquet
+robot_type: arx5
+
+# fps is only used when the first HDF5 file does not define attrs["frame_rate"].
+fps: 50.0
+task: "Put the apple in the bowl."
+default_task: null
+
+# Raw HDF5 image dataset key -> LeRobot feature key.
+image_map:
+  - middle_image=observation.images.top
+  - right_image=observation.images.right_wrist
+
+right_gripper_binarization:
+  enabled: True
+  # Apple demos only dip slightly below the fully-open width when grasping.
+  close_below: 0.079

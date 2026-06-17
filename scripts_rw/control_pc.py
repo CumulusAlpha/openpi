@@ -1,3 +1,4 @@
+import os
 import time
 import numpy as np
 from copy import deepcopy
@@ -26,8 +27,8 @@ from utils.realsense_cam import RealSenseManager
 
 
 # ================= 配置区域 =================
-HOST = "127.0.0.1"
-PORT = 18000
+HOST = "10.42.0.188"
+PORT = 8000
 TIMEOUT = 15000
 
 FPS = 50
@@ -41,7 +42,10 @@ RIGHT_GRIPPER_BINARY_ACTION = True
 RIGHT_GRIPPER_BINARY_DIM = 13
 RIGHT_GRIPPER_BINARY_THRESHOLD = 0.5
 RIGHT_GRIPPER_OPEN_WIDTH = 0.082
-RIGHT_GRIPPER_CLOSED_WIDTH = 0.060
+RIGHT_GRIPPER_CLOSED_WIDTH = 0.03
+RIGHT_GRIPPER_DEBUG = True
+RIGHT_GRIPPER_DEBUG_EVERY_N = 10
+DEBUG_LOG_PATH = REPO_ROOT / "logs" / "control_pc_debug.log"
 
 TASK = "Complete_chemical_reaction_experiment"
 
@@ -82,6 +86,23 @@ IMAGE_CAMERA_MAP = {
 
 # ===========================================
 
+def _add_host_to_no_proxy(host: str):
+    for key in ("NO_PROXY", "no_proxy"):
+        current = os.environ.get(key, "")
+        entries = [entry.strip() for entry in current.split(",") if entry.strip()]
+        if host not in entries:
+            entries.append(host)
+            os.environ[key] = ",".join(entries)
+
+
+def _debug_print(message: str):
+    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    line = f"[{timestamp}] {message}"
+    print(line, flush=True)
+    DEBUG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with DEBUG_LOG_PATH.open("a", encoding="utf-8") as f:
+        f.write(line + "\n")
+
 
 class DualArmCollector:
     """ARX bimanual controller used by the OpenPI websocket client."""
@@ -109,6 +130,8 @@ class DualArmCollector:
             verbose=REALSENSE_VERBOSE,
         )
         self.last_commanded_action = None
+        self._execute_count = 0
+        self._last_right_gripper_decision = None
 
     def get_observation(self) -> dict:
         qpos, qvel, effort, eef = self.robot_operator.read_arms()
@@ -138,11 +161,18 @@ class DualArmCollector:
         action = np.asarray(action, dtype=np.float64).reshape(-1)
         if action.shape[0] != 14:
             raise ValueError(f"ARX action should have 14 values, got shape {action.shape}")
+        raw_action = action.copy()
+        raw_gripper_value = float(raw_action[RIGHT_GRIPPER_BINARY_DIM])
+        raw_decision = "close" if raw_gripper_value > RIGHT_GRIPPER_BINARY_THRESHOLD else "open"
+
         action = self._map_binary_right_gripper_action(action)
+        mapped_gripper = float(action[RIGHT_GRIPPER_BINARY_DIM])
+
         if self.last_commanded_action is None:
             qpos, _, _, _ = self.robot_operator.read_arms()
             self.last_commanded_action = qpos.astype(np.float64)
         action = ACTION_LPF_ALPHA * action + (1.0 - ACTION_LPF_ALPHA) * self.last_commanded_action
+        lpf_gripper = float(action[RIGHT_GRIPPER_BINARY_DIM])
         if ACTION_SAFETY_CLIP:
             qpos, _, _, _ = self.robot_operator.read_arms()
             step_limits = np.array([MAX_JOINT_STEP] * 6 + [MAX_GRIPPER_STEP] + [MAX_JOINT_STEP] * 6 + [MAX_GRIPPER_STEP])
@@ -155,6 +185,34 @@ class DualArmCollector:
                     f"sent_delta_max={np.max(np.abs(delta)):.4f}"
                 )
             action = clipped_action
+        else:
+            qpos, _, _, _ = self.robot_operator.read_arms()
+
+        self._execute_count += 1
+        final_gripper = float(action[RIGHT_GRIPPER_BINARY_DIM])
+        current_gripper = float(qpos[RIGHT_GRIPPER_BINARY_DIM])
+        should_log = (
+            RIGHT_GRIPPER_DEBUG
+            and (
+                self._execute_count % RIGHT_GRIPPER_DEBUG_EVERY_N == 0
+                or raw_decision != self._last_right_gripper_decision
+            )
+        )
+        if should_log:
+            _debug_print(
+                "[gripper-exec] "
+                f"step={self._execute_count} "
+                f"raw_action13={raw_gripper_value:.5f} "
+                f"threshold={RIGHT_GRIPPER_BINARY_THRESHOLD:.2f} "
+                f"decision={raw_decision} "
+                f"mapped_target={mapped_gripper:.5f} "
+                f"current_qpos13={current_gripper:.5f} "
+                f"after_lpf={lpf_gripper:.5f} "
+                f"final_cmd13={final_gripper:.5f} "
+                f"cmd_delta={final_gripper - current_gripper:+.5f}"
+            )
+            self._last_right_gripper_decision = raw_decision
+
         self.last_commanded_action = action.copy()
         self.robot_operator.command_arms(action, command_delay=1.0 / FPS)
 
@@ -175,6 +233,7 @@ class DualArmCollector:
         self.robot_operator.reset_to_home()
         self.robot_operator.set_command_active()
         self.last_commanded_action = None
+        self._last_right_gripper_decision = None
 
     def close(self):
         if self.realsense_manager is not None:
@@ -351,6 +410,21 @@ class AsyncInferenceManager:
             )
         
         actions_array = action_dict["actions"]
+        if RIGHT_GRIPPER_DEBUG:
+            action13 = np.asarray(actions_array, dtype=np.float32)[:, RIGHT_GRIPPER_BINARY_DIM]
+            close_count = int(np.sum(action13 > RIGHT_GRIPPER_BINARY_THRESHOLD))
+            preview = np.array2string(action13[:10], precision=4, separator=", ")
+            current_right_gripper = float(obs_dict["right_qpos"][6])
+            _debug_print(
+                "[gripper-chunk] "
+                f"dim={RIGHT_GRIPPER_BINARY_DIM} "
+                f"current_right_qpos={current_right_gripper:.5f} "
+                f"min={np.min(action13):.5f} "
+                f"max={np.max(action13):.5f} "
+                f"mean={np.mean(action13):.5f} "
+                f"close_count={close_count}/{len(action13)} "
+                f"first10={preview}"
+            )
         new_actions = [actions_array[i] for i in range(len(actions_array))]
         end = time.perf_counter()
         # 强制延迟
@@ -406,6 +480,8 @@ def handle_button_events(button_reader, async_manager, arx_controller):
 
 
 def main():
+    _add_host_to_no_proxy(HOST)
+
     try:
         from openpi_client import websocket_client_policy as _websocket_client_policy
     except ImportError as exc:

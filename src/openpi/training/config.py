@@ -592,6 +592,77 @@ class TrainConfig:
             raise ValueError("Cannot resume and overwrite at the same time.")
 
 
+def _arx_lora_chunk50_model() -> pi0_config.Pi0Config:
+    return pi0_config.Pi0Config(
+        pi05=True,
+        paligemma_variant="gemma_2b_lora",
+        action_expert_variant="gemma_300m_lora",
+        action_horizon=50,
+    )
+
+
+_ARX_LORA_CHUNK50_CAMERA_MAP = {
+    "left": ("cam_left_wrist", "observation.images.left_wrist"),
+    "middle": ("cam_high", "observation.images.top"),
+    "right": ("cam_right_wrist", "observation.images.right_wrist"),
+}
+
+
+def _arx_lora_chunk50_repack_transforms(cameras: Sequence[str]) -> _transforms.Group:
+    unknown_cameras = tuple(camera for camera in cameras if camera not in _ARX_LORA_CHUNK50_CAMERA_MAP)
+    if unknown_cameras:
+        raise ValueError(f"Unknown ARX camera names: {unknown_cameras}")
+
+    images = {
+        policy_key: dataset_key
+        for camera in cameras
+        for policy_key, dataset_key in [_ARX_LORA_CHUNK50_CAMERA_MAP[camera]]
+    }
+
+    return _transforms.Group(
+        inputs=[
+            _transforms.RepackTransform(
+                {
+                    "images": images,
+                    "state": "observation.state",
+                    "actions": "action",
+                    "prompt": "prompt",
+                }
+            )
+        ]
+    )
+
+
+def _arx_lora_chunk50_delta_config(name: str, repo_id: str, *, cameras: Sequence[str]) -> TrainConfig:
+    model = _arx_lora_chunk50_model()
+    return TrainConfig(
+        name=name,
+        model=model,
+        data=LeRobotAlohaDataConfig(
+            repo_id=repo_id,
+            use_delta_joint_actions=True,
+            adapt_to_pi=False,
+            base_config=DataConfig(prompt_from_task=True),
+            repack_transforms=_arx_lora_chunk50_repack_transforms(cameras),
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "/data/sy/project/openpi/pretrained_weights/pi05_base/params"
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=10_000,
+            peak_lr=5e-5,
+            decay_steps=1_000_000,
+            decay_lr=5e-5,
+        ),
+        save_interval=3000,
+        num_train_steps=30_000,
+        batch_size=24,
+        freeze_filter=model.get_freeze_filter(),
+    )
+
+
 # Use `get_config` if you need to get a config by name in your code.
 _CONFIGS = [
     #
@@ -861,55 +932,15 @@ _CONFIGS = [
         num_train_steps=20_000,
         batch_size=64,
     ),
-    TrainConfig(
-        name="pi0_arx_lora_chunk50_delta",
-        model=pi0_config.Pi0Config(
-            pi05=True,
-            paligemma_variant="gemma_2b_lora",
-            action_expert_variant="gemma_300m_lora",
-            action_horizon=50,
-        ),
-        data=LeRobotAlohaDataConfig(
-            repo_id="datasets/apple/parquet",
-            use_delta_joint_actions=True,
-            adapt_to_pi=False,
-            base_config=DataConfig(prompt_from_task=True),
-            repack_transforms=_transforms.Group(
-                inputs=[
-                    _transforms.RepackTransform(
-                        {
-                            "images": {
-                                "cam_high": "observation.images.top",
-                                "cam_right_wrist": "observation.images.right_wrist",
-                            },
-                            "state": "observation.state",
-                            "actions": "action",
-                            "prompt": "prompt",
-                        }
-                    )
-                ]
-            ),
-        ),
-        weight_loader=weight_loaders.CheckpointWeightLoader(
-            "/data/sy/project/openpi/pretrained_weights/pi05_base/params"
-        ),
-        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
-        ema_decay=0.999,
-        lr_schedule=_optimizer.CosineDecaySchedule(
-            warmup_steps=10_000,
-            peak_lr=5e-5,
-            decay_steps=1_000_000,
-            decay_lr=5e-5,
-        ),
-        save_interval=3000,
-        num_train_steps=30_000,
-        batch_size=24,
-        freeze_filter=pi0_config.Pi0Config(
-            pi05=True,
-            paligemma_variant="gemma_2b_lora",
-            action_expert_variant="gemma_300m_lora",
-            action_horizon=50,
-        ).get_freeze_filter(),
+    _arx_lora_chunk50_delta_config(
+        "pi0_arx_lora_chunk50_delta_apple",
+        "datasets/apple/parquet",
+        cameras=("middle", "right"),
+    ),
+    _arx_lora_chunk50_delta_config(
+        "pi0_arx_lora_chunk50_delta_tube",
+        "datasets/tube/parquet",
+        cameras=("left", "middle", "right"),
     ),
     #
     # Fine-tuning DROID configs.

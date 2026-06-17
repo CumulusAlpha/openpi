@@ -1,0 +1,24 @@
+# @package _global_
+
+input_path: datasets/tube/hdf5
+repo_id: local/tube
+output_path: datasets/tube/parquet
+robot_type: arx5
+
+# fps is only used when the first HDF5 file does not define attrs["frame_rate"].
+fps: 50.0
+task: "Move a test tube from one tube rack to another tube rack."
+default_task: null
+
+# Raw HDF5 image dataset key -> LeRobot feature key.
+image_map:
+  - left_image=observation.images.left_wrist
+  - middle_image=observation.images.top
+  - right_image=observation.images.right_wrist
+
+right_gripper_binarization:
+  enabled: True
+  # Tube demos have a distinct tight-grasp region near 0.027-0.035 and a broad
+  # transition region above that. 0.050 labels real grasping instead of merely
+  # "not fully open" (the old 0.079 threshold marked ~84% of frames closed).
+  close_below: 0.050
