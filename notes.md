@@ -1,30 +1,50 @@
-# VLA Fine-Tuning Notes
+# VLA 微调笔记
 
-## Quick Commands
+## 数据采集
 
-Collect HDF5 demos:
+采集前先激活 CAN：
+
+```bash
+bash utils/setup_can.sh
+```
+
+这个脚本会通过 `slcand` 创建并拉起机械臂和按钮使用的 CAN 接口：
+
+- 左臂 - `/dev/arxcan1` -> `can0` 
+- 右臂 - `/dev/arxcan3` -> `can1` 
+- 按钮 - `/dev/arxcan6` -> `can6` 
+
+运行结束后，脚本会打印当前链路状态。也可以手动检查：
+
+```bash
+ip -br link
+```
+
+采集 HDF5 演示数据：
 
 ```bash
 python scripts_rw/collect.py
 ```
 
-Config: `scripts_rw/configs/collect.yaml`
-Output: `<datasets>/episode_N.hdf5`, where `<datasets>` is the YAML `datasets:` field.
-Current config value: `datasets/tube/hdf5`
+配置文件：`scripts_rw/configs/collect.yaml`
+输出：`<datasets>/episode_N.hdf5`，其中 `<datasets>` 是 YAML 里的 `datasets:` 字段。
+当前配置值：`datasets/tube/hdf5`
 
-Convert HDF5 to LeRobot:
+将 HDF5 转换为 LeRobot 格式：
 
 ```bash
 python utils/convert_act_hdf5_to_lerobot.py
 ```
 
-Config: `config/dataset/convert_act_hdf5_to_lerobot.yaml`
-Input: `input_path`, currently `datasets/tube/hdf5`
-Output: `output_path`, currently `datasets/tube/parquet`
-Default behavior: non-destructive. If output already exists, conversion stops.
-To intentionally regenerate output, run `python utils/convert_act_hdf5_to_lerobot.py overwrite=true`.
+配置文件：`config/dataset/convert_act_hdf5_to_lerobot.yaml`
+输入：`input_path`，当前为 `datasets/tube/hdf5`
+输出：`output_path`，当前为 `datasets/tube/parquet`
+默认行为：非破坏式。如果输出目录已经存在，转换会停止。
+如果需要主动重新生成输出，运行 `python utils/convert_act_hdf5_to_lerobot.py overwrite=true`。
 
-Compute norm stats:
+## 训练
+
+计算归一化统计量：
 
 ```bash
 python scripts/compute_norm_stats.py \
@@ -32,12 +52,12 @@ python scripts/compute_norm_stats.py \
   --repo-id datasets/tube/parquet
 ```
 
-Config: `src/openpi/training/config.py`, config name `pi0_arx_lora_chunk50_delta`
-Input: `--repo-id`, here `datasets/tube/parquet`. If omitted, it falls back to `data.repo_id` in config.py.
-Output: `config.assets_dirs / data_config.asset_id`. Exact save line: `scripts/compute_norm_stats.py:192`
-Post-process: replaces joint dims `0:6,7:13` with official ARX stats; grippers and other dims stay computed from this dataset.
+配置：`src/openpi/training/config.py`，配置名为 `pi0_arx_lora_chunk50_delta`
+输入：`--repo-id`，这里是 `datasets/tube/parquet`。如果省略，会回退到 `config.py` 里的 `data.repo_id`。
+输出：`config.assets_dirs / data_config.asset_id`。具体保存位置对应 `scripts/compute_norm_stats.py:192`。
+后处理：会用官方 ARX 统计量替换关节维度 `0:6,7:13`；夹爪和其他维度继续使用当前数据集计算得到的统计量。
 
-Train:
+开始训练：
 
 ```bash
 CUDA_VISIBLE_DEVICES=<GPU_IDS> XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 \
@@ -48,10 +68,10 @@ python scripts/train.py pi0_arx_lora_chunk50_delta \
   --keep-period=3000
 ```
 
-Use `CUDA_VISIBLE_DEVICES=0` for GPU 0, or `CUDA_VISIBLE_DEVICES=0,1` for GPUs 0 and 1.
-`--exp-name` names the run folder and wandb run. Checkpoints go to `checkpoints/pi0_arx_lora_chunk50_delta/tube_test/`.
+使用 `CUDA_VISIBLE_DEVICES=0` 表示使用 0 号 GPU，使用 `CUDA_VISIBLE_DEVICES=0,1` 表示使用 0 号和 1 号 GPU。
+`--exp-name` 会命名运行目录和 wandb 运行名。Checkpoint 会保存到 `checkpoints/pi0_arx_lora_chunk50_delta/tube_test/`。
 
-Resume training:
+继续训练：
 
 ```bash
 CUDA_VISIBLE_DEVICES=<GPU_IDS> XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 \
@@ -61,343 +81,56 @@ python scripts/train.py pi0_arx_lora_chunk50_delta \
   --resume
 ```
 
-Serve checkpoint:
+## 部署
+
+先用网线连接笔记本电脑和台式机：
+
+1. 用网线把笔记本电脑和台式机直接连接起来。
+2. 在台式机上查看网卡和 IP：
 
 ```bash
-python scripts/serve_policy.py --port=18000 policy:checkpoint \
+ip addr show
+```
+
+3. 找到本地有线网卡，例如 `enp6s0`，查看它下面的 `inet` 地址，例如 `192.168.1.23/24`。
+4. 在笔记本电脑上用 SSH 连接台式机：
+
+```bash
+ssh <台式机用户名>@<台式机IP> # 例如ssh ubuntu@192.168.1.23
+```
+
+如果有线网卡下面没有 `inet` 地址，说明直连网络可能还没有分配 IP，需要先给两台机器配置同一网段的静态 IP。
+
+部署时也需要先激活 CAN：
+
+```bash
+bash utils/setup_can.sh
+```
+
+确认 CAN 已经拉起：
+
+```bash
+ip -br link
+```
+---
+在台式机上修改serve_policy.py里面的ip地址为刚刚拿到的台式机ip，启动 checkpoint 服务：
+
+```bash
+python scripts/serve_policy.py --port=8080 policy:checkpoint \
   --policy.config=pi0_arx_lora_chunk50_delta \
   --policy.repo-id=datasets/tube/parquet \
   --policy.dir=checkpoints/pi0_arx_lora_chunk50_delta/tube_test/29999
 ```
 
-This loads checkpoint `29999` and starts the websocket policy server.
-Use port `18000` to match `scripts_rw/control_pc.py`.
+这会加载 checkpoint `29999`，并启动 websocket policy server。
+端口使用 `8080`，以匹配 `scripts_rw/control_pc.py`，这个地方的端口可以自己修改防止冲突。
 
-Run robot inference client:
+---
+在笔记本运行机器人控制客户端：
 
 ```bash
 python scripts_rw/control_pc.py
 ```
 
-Config: top constants in `scripts_rw/control_pc.py`
-Checkpoint used: whatever checkpoint is being served by `scripts/serve_policy.py`.
-`control_pc.py` does not load the checkpoint directly; it connects to the policy server.
-
-## 1. Collect HDF5 Episodes
-
-Collect robot demonstrations with:
-
-```bash
-python scripts_rw/collect.py
-```
-
-`collect.py` uses:
-
-```text
-scripts_rw/configs/collect.yaml
-```
-
-Collected episodes are saved as HDF5 files:
-
-```text
-<datasets>/episode_0.hdf5
-<datasets>/episode_1.hdf5
-...
-```
-
-`<datasets>` comes from the `datasets:` field in `scripts_rw/configs/collect.yaml`.
-Current config value:
-
-```yaml
-datasets: datasets/tube/hdf5
-```
-
-If using the tube dataset folder layout, put or collect the raw HDF5 files under:
-
-```text
-datasets/tube/hdf5/
-```
-
-## 2. Convert HDF5 To LeRobot
-
-Conversion config:
-
-```text
-config/dataset/convert_act_hdf5_to_lerobot.yaml
-```
-
-Important fields:
-
-```yaml
-input_path: datasets/tube/hdf5
-repo_id: local/tube
-output_path: datasets/tube/parquet
-task: "Move a test tube from one tube rack to another tube rack."
-```
-
-`input_path` is the folder containing `episode_*.hdf5`.
-`output_path` is the converted LeRobot dataset folder.
-Relative paths resolve from the repo root.
-
-Run conversion:
-
-```bash
-python utils/convert_act_hdf5_to_lerobot.py
-```
-
-Expected result:
-
-```text
-datasets/tube/parquet/
-```
-
-The converter is non-destructive by default:
-
-```yaml
-overwrite: False
-```
-
-If `datasets/tube/parquet` already exists, the command stops before writing. To intentionally regenerate it:
-
-```bash
-python utils/convert_act_hdf5_to_lerobot.py overwrite=true
-```
-
-Regeneration is guarded: the converter refuses to use the same folder for input and output, refuses nested
-input/output paths, and writes to a temporary sibling folder before replacing the final output.
-
-## 3. Update Training Config
-
-Training configs are in:
-
-```text
-src/openpi/training/config.py
-```
-
-The current ARX LoRA config is:
-
-```python
-name="pi0_arx_lora_chunk50_delta"
-```
-
-The ARX config has defaults, but the dataset can be selected directly from the command line.
-Use the converted LeRobot dataset path as `--data.repo-id`:
-
-```bash
-python scripts/train.py pi0_arx_lora_chunk50_delta \
-  --data.repo-id=datasets/tube/parquet \
-  --exp-name=tube_test \
-  --overwrite
-```
-
-Current defaults in `config.py` are only fallbacks if no command override is passed:
-
-```python
-repo_id="datasets/apple/parquet"
-base_config=DataConfig(prompt_from_task=True)
-```
-
-Do not pass `--data.default-prompt` for the tube dataset unless the converted dataset is missing task text.
-The converter writes the instruction from `task:` in `config/dataset/convert_act_hdf5_to_lerobot.yaml`
-into the LeRobot dataset, and `prompt_from_task=True` makes training use that task.
-
-## 4. Compute Norm Stats
-
-Run norm stats with the same repo id you will use for training:
-
-```bash
-python scripts/compute_norm_stats.py \
-  --config-name pi0_arx_lora_chunk50_delta \
-  --repo-id datasets/tube/parquet
-```
-
-This writes normalization assets used during training and inference.
-The input dataset is not from `config/dataset/convert_act_hdf5_to_lerobot.yaml`.
-It comes from `--repo-id`. If `--repo-id` is omitted, it falls back to the training config selected by
-`--config-name`.
-
-After computing stats from the dataset, the script replaces only ARX joint dimensions with official ARX stats:
-
-```text
-joint dims: 0,1,2,3,4,5,7,8,9,10,11,12
-kept from dataset: left/right grippers at 6 and 13, plus any other dims
-```
-
-Default official source:
-
-```text
-assets/arx/
-```
-
-This file is tracked in the repo as `assets/arx/norm_stats.json`.
-
-To disable this post-process and save fully dataset-computed stats:
-
-```bash
-python scripts/compute_norm_stats.py \
-  --config-name pi0_arx_lora_chunk50_delta \
-  --repo-id datasets/tube/parquet \
-  --official-joint-stats-dir None
-```
-
-Exact code path:
-
-```python
-# scripts/compute_norm_stats.py
-config = _config.with_repo_id(_config.get_config(config_name), repo_id)
-data_config = config.data.create(config.assets_dirs, config.model)
-
-# scripts/compute_norm_stats.py:183-188
-norm_stats = {key: stats.get_statistics() for key, stats in stats.items()}
-norm_stats = replace_joints_with_official_stats(norm_stats, official_joint_stats_dir, indices)
-
-# src/openpi/training/config.py, current ARX fallback
-repo_id="datasets/apple/parquet"
-base_config=DataConfig(prompt_from_task=True)
-```
-
-For local paths, `data_config.repo_id` resolves to the absolute LeRobot dataset path used by LeRobot, while
-`data_config.asset_id` remains a checkpoint-safe relative id such as `datasets/tube/parquet`.
-
-The output path is also explicit in the script:
-
-```python
-# scripts/compute_norm_stats.py:190-192
-output_path = config.assets_dirs / data_config.asset_id
-print(f"Writing stats to: {output_path}")
-normalize.save(output_path, norm_stats)
-```
-
-`config.assets_dirs` is:
-
-```python
-# src/openpi/training/config.py:537-540
-return (pathlib.Path(self.assets_base_dir) / self.name).resolve()
-```
-
-So the output path is:
-
-```text
-assets/<config_name>/<data_config.asset_id>/
-```
-
-For example, if `data_config.asset_id` is `datasets/tube/parquet`, stats are written under:
-
-```text
-assets/pi0_arx_lora_chunk50_delta/datasets/tube/parquet/
-```
-
-It does not save into the dataset itself. For example, the apple LeRobot dataset is under `datasets/apple/parquet`,
-but its OpenPI training norm stats are separate assets. In this repo, norm stats are treated as training/config assets,
-then copied into checkpoints during checkpoint saving. That keeps the converted LeRobot dataset separate from
-model-specific preprocessing stats.
-
-## 5. Train
-
-Basic JAX training command:
-
-```bash
-XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 \
-python scripts/train.py pi0_arx_lora_chunk50_delta \
-  --data.repo-id=datasets/tube/parquet \
-  --exp-name=tube_test \
-  --overwrite \
-  --keep-period=3000
-```
-
-To select GPUs, prefix the command with `CUDA_VISIBLE_DEVICES=<GPU_IDS>`:
-
-```bash
-CUDA_VISIBLE_DEVICES=0 XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 \
-python scripts/train.py pi0_arx_lora_chunk50_delta \
-  --data.repo-id=datasets/tube/parquet \
-  --exp-name=tube_test \
-  --overwrite \
-  --keep-period=3000
-```
-
-`--exp-name` names the training run. It affects:
-
-```text
-checkpoints/<config_name>/<exp_name>/
-```
-
-and the wandb run name/id. Use the same `--exp-name` with `--resume` to continue that run.
-
-Use `--resume` instead of `--overwrite` to continue an existing run:
-
-```bash
-XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 \
-python scripts/train.py pi0_arx_lora_chunk50_delta \
-  --data.repo-id=datasets/tube/parquet \
-  --exp-name=tube_test \
-  --resume
-```
-
-Checkpoints are written to:
-
-```text
-checkpoints/pi0_arx_lora_chunk50_delta/tube_test/
-```
-
-For the current ARX config:
-
-```python
-save_interval=3000
-num_train_steps=30000
-```
-
-So training attempts to save at:
-
-```text
-3000, 6000, 9000, 12000, 15000, 18000, 21000, 24000, 27000, 29999
-```
-
-Orbax keeps only the latest checkpoint by default, plus checkpoints matching `keep_period`.
-With default `keep_period=5000`, after a full run you may only see:
-
-```text
-15000
-29999
-```
-
-Use `--keep-period=3000` if you want to preserve every scheduled checkpoint.
-
-## 6. Serve For Robot Inference
-
-After training, serve a checkpoint:
-
-```bash
-python scripts/serve_policy.py --port=18000 policy:checkpoint \
-  --policy.config=pi0_arx_lora_chunk50_delta \
-  --policy.repo-id=datasets/tube/parquet \
-  --policy.dir=checkpoints/pi0_arx_lora_chunk50_delta/tube_test/29999
-```
-
-This loads the model from `--policy.dir` and runs a websocket policy server.
-The robot client sends observations to this server and receives actions back.
-Pass the same `--policy.repo-id` that was used for `--data.repo-id` during training so the policy config uses the
-same dataset asset id when loading norm stats from the checkpoint.
-
-Then run the robot control client:
-
-```bash
-python scripts_rw/control_pc.py
-```
-
-`control_pc.py` uses:
-
-```python
-HOST = "127.0.0.1"
-PORT = 18000
-```
-
-It uses whichever checkpoint is currently loaded by the policy server. To switch checkpoints, restart `serve_policy.py` with a different `--policy.dir`.
-
-Button controls in `control_pc.py`:
-
-```text
-button 1: home
-button 2: start inference
-button 3: stop inference
-```
+使用的 checkpoint：由 `scripts/serve_policy.py` 当前提供服务的 checkpoint 决定。
+`control_pc.py` 不会直接加载 checkpoint；它会连接到 policy server。
