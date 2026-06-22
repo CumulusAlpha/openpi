@@ -48,11 +48,11 @@ python utils/convert_act_hdf5_to_lerobot.py
 
 ```bash
 python scripts/compute_norm_stats.py \
-  --config-name pi0_arx_lora_chunk50_delta \
+  --config-name pi0_arx_lora_chunk50_delta_tube \
   --repo-id datasets/tube/parquet
 ```
 
-配置：`src/openpi/training/config.py`，配置名为 `pi0_arx_lora_chunk50_delta`
+配置：`src/openpi/training/config.py`，tube 数据使用 `pi0_arx_lora_chunk50_delta_tube`，apple 数据使用 `pi0_arx_lora_chunk50_delta_apple`。
 输入：`--repo-id`，这里是 `datasets/tube/parquet`。如果省略，会回退到 `config.py` 里的 `data.repo_id`。
 输出：`config.assets_dirs / data_config.asset_id`。具体保存位置对应 `scripts/compute_norm_stats.py:192`。
 后处理：会用官方 ARX 统计量替换关节维度 `0:6,7:13`；夹爪和其他维度继续使用当前数据集计算得到的统计量。
@@ -61,7 +61,7 @@ python scripts/compute_norm_stats.py \
 
 ```bash
 CUDA_VISIBLE_DEVICES=<GPU_IDS> XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 \
-python scripts/train.py pi0_arx_lora_chunk50_delta \
+python scripts/train.py pi0_arx_lora_chunk50_delta_tube \
   --data.repo-id=datasets/tube/parquet \
   --exp-name=tube_test \
   --overwrite \
@@ -69,13 +69,26 @@ python scripts/train.py pi0_arx_lora_chunk50_delta \
 ```
 
 使用 `CUDA_VISIBLE_DEVICES=0` 表示使用 0 号 GPU，使用 `CUDA_VISIBLE_DEVICES=0,1` 表示使用 0 号和 1 号 GPU。
-`--exp-name` 会命名运行目录和 wandb 运行名。Checkpoint 会保存到 `checkpoints/pi0_arx_lora_chunk50_delta/tube_test/`。
+`--exp-name` 会命名运行目录和 wandb 运行名。Tube checkpoint 会保存到 `checkpoints/pi0_arx_lora_chunk50_delta_tube/tube_test/`。
+
+Apple 数据对应命令：
+
+```bash
+CUDA_VISIBLE_DEVICES=<GPU_IDS> XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 \
+python scripts/train.py pi0_arx_lora_chunk50_delta_apple \
+  --data.repo-id=datasets/apple/parquet \
+  --exp-name=apple_lora \
+  --overwrite \
+  --keep-period=3000
+```
+
+Apple checkpoint 会保存到 `checkpoints/pi0_arx_lora_chunk50_delta_apple/apple_lora/`。
 
 继续训练：
 
 ```bash
 CUDA_VISIBLE_DEVICES=<GPU_IDS> XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 \
-python scripts/train.py pi0_arx_lora_chunk50_delta \
+python scripts/train.py pi0_arx_lora_chunk50_delta_tube \
   --data.repo-id=datasets/tube/parquet \
   --exp-name=tube_test \
   --resume
@@ -117,9 +130,9 @@ ip -br link
 
 ```bash
 python scripts/serve_policy.py --port=8080 policy:checkpoint \
-  --policy.config=pi0_arx_lora_chunk50_delta \
+  --policy.config=pi0_arx_lora_chunk50_delta_tube \
   --policy.repo-id=datasets/tube/parquet \
-  --policy.dir=checkpoints/pi0_arx_lora_chunk50_delta/tube_test/29999
+  --policy.dir=checkpoints/pi0_arx_lora_chunk50_delta_tube/tube_test/29999
 ```
 
 这会加载 checkpoint `29999`，并启动 websocket policy server。
