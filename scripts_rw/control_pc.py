@@ -28,7 +28,7 @@ from utils.realsense_cam import RealSenseManager
 
 # ================= 配置区域 =================
 HOST = "10.42.0.188"
-PORT = 8000
+PORT = 8080
 TIMEOUT = 15000
 
 FPS = 50
@@ -36,15 +36,16 @@ S_MIN = 30
 ACTION_SAFETY_CLIP = True
 ACTION_LPF_ALPHA = 0.35
 MAX_JOINT_STEP = 0.025
-MAX_GRIPPER_STEP = 0.003
+MAX_GRIPPER_STEP = 0.02
 
 RIGHT_GRIPPER_BINARY_ACTION = True
 RIGHT_GRIPPER_BINARY_DIM = 13
 RIGHT_GRIPPER_BINARY_THRESHOLD = 0.5
 RIGHT_GRIPPER_OPEN_WIDTH = 0.082
-RIGHT_GRIPPER_CLOSED_WIDTH = 0.03
+RIGHT_GRIPPER_CLOSED_WIDTH = 0.028
 RIGHT_GRIPPER_DEBUG = True
 RIGHT_GRIPPER_DEBUG_EVERY_N = 10
+RIGHT_GRIPPER_DEBUG_EVERY_CLOSE_STEP = True
 DEBUG_LOG_PATH = REPO_ROOT / "logs" / "control_pc_debug.log"
 
 TASK = "Complete_chemical_reaction_experiment"
@@ -132,6 +133,7 @@ class DualArmCollector:
         self.last_commanded_action = None
         self._execute_count = 0
         self._last_right_gripper_decision = None
+        self._last_commanded_right_gripper = None
 
     def get_observation(self) -> dict:
         qpos, qvel, effort, eef = self.robot_operator.read_arms()
@@ -164,6 +166,7 @@ class DualArmCollector:
         raw_action = action.copy()
         raw_gripper_value = float(raw_action[RIGHT_GRIPPER_BINARY_DIM])
         raw_decision = "close" if raw_gripper_value > RIGHT_GRIPPER_BINARY_THRESHOLD else "open"
+        previous_commanded_gripper = self._last_commanded_right_gripper
 
         action = self._map_binary_right_gripper_action(action)
         mapped_gripper = float(action[RIGHT_GRIPPER_BINARY_DIM])
@@ -173,28 +176,42 @@ class DualArmCollector:
             self.last_commanded_action = qpos.astype(np.float64)
         action = ACTION_LPF_ALPHA * action + (1.0 - ACTION_LPF_ALPHA) * self.last_commanded_action
         lpf_gripper = float(action[RIGHT_GRIPPER_BINARY_DIM])
+        lpf_gap = lpf_gripper - mapped_gripper
+        gripper_delta_before_clip = None
+        gripper_delta_after_clip = None
+        gripper_clip_amount = 0.0
+        gripper_was_clipped = False
         if ACTION_SAFETY_CLIP:
             qpos, _, _, _ = self.robot_operator.read_arms()
             step_limits = np.array([MAX_JOINT_STEP] * 6 + [MAX_GRIPPER_STEP] + [MAX_JOINT_STEP] * 6 + [MAX_GRIPPER_STEP])
-            delta = np.clip(action - qpos, -step_limits, step_limits)
+            unclipped_delta = action - qpos
+            delta = np.clip(unclipped_delta, -step_limits, step_limits)
             clipped_action = qpos + delta
+            gripper_delta_before_clip = float(unclipped_delta[RIGHT_GRIPPER_BINARY_DIM])
+            gripper_delta_after_clip = float(delta[RIGHT_GRIPPER_BINARY_DIM])
+            gripper_clip_amount = gripper_delta_before_clip - gripper_delta_after_clip
+            gripper_was_clipped = abs(gripper_clip_amount) > 1e-6
             if np.max(np.abs(action - clipped_action)) > 1e-6:
                 print(
                     "[safety] action clipped "
-                    f"raw_delta_max={np.max(np.abs(action - qpos)):.4f} "
+                    f"raw_delta_max={np.max(np.abs(unclipped_delta)):.4f} "
                     f"sent_delta_max={np.max(np.abs(delta)):.4f}"
                 )
             action = clipped_action
         else:
             qpos, _, _, _ = self.robot_operator.read_arms()
+            gripper_delta_before_clip = float(action[RIGHT_GRIPPER_BINARY_DIM] - qpos[RIGHT_GRIPPER_BINARY_DIM])
+            gripper_delta_after_clip = gripper_delta_before_clip
 
         self._execute_count += 1
         final_gripper = float(action[RIGHT_GRIPPER_BINARY_DIM])
         current_gripper = float(qpos[RIGHT_GRIPPER_BINARY_DIM])
+        target_gap = final_gripper - mapped_gripper
         should_log = (
             RIGHT_GRIPPER_DEBUG
             and (
                 self._execute_count % RIGHT_GRIPPER_DEBUG_EVERY_N == 0
+                or (RIGHT_GRIPPER_DEBUG_EVERY_CLOSE_STEP and raw_decision == "close")
                 or raw_decision != self._last_right_gripper_decision
             )
         )
@@ -207,13 +224,21 @@ class DualArmCollector:
                 f"decision={raw_decision} "
                 f"mapped_target={mapped_gripper:.5f} "
                 f"current_qpos13={current_gripper:.5f} "
+                f"prev_cmd13={previous_commanded_gripper if previous_commanded_gripper is not None else 'None'} "
                 f"after_lpf={lpf_gripper:.5f} "
+                f"lpf_gap_to_target={lpf_gap:+.5f} "
+                f"delta_before_clip={gripper_delta_before_clip:+.5f} "
+                f"delta_after_clip={gripper_delta_after_clip:+.5f} "
+                f"clip_amount={gripper_clip_amount:+.5f} "
+                f"gripper_clipped={gripper_was_clipped} "
                 f"final_cmd13={final_gripper:.5f} "
-                f"cmd_delta={final_gripper - current_gripper:+.5f}"
+                f"cmd_delta={final_gripper - current_gripper:+.5f} "
+                f"final_gap_to_target={target_gap:+.5f}"
             )
             self._last_right_gripper_decision = raw_decision
 
         self.last_commanded_action = action.copy()
+        self._last_commanded_right_gripper = final_gripper
         self.robot_operator.command_arms(action, command_delay=1.0 / FPS)
 
     def _map_binary_right_gripper_action(self, action):
@@ -234,6 +259,7 @@ class DualArmCollector:
         self.robot_operator.set_command_active()
         self.last_commanded_action = None
         self._last_right_gripper_decision = None
+        self._last_commanded_right_gripper = None
 
     def close(self):
         if self.realsense_manager is not None:
@@ -311,6 +337,23 @@ class AsyncInferenceManager:
         self.delay_queue.append(5)
         self.inference_trigger.clear()
         self.controller.last_commanded_action = None
+        self.controller._last_commanded_right_gripper = None
+        self.controller._last_right_gripper_decision = None
+        if RIGHT_GRIPPER_DEBUG:
+            DEBUG_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            _debug_print(
+                "[run-start] "
+                f"task={TASK!r} "
+                f"fps={FPS} "
+                f"binary_action={RIGHT_GRIPPER_BINARY_ACTION} "
+                f"dim={RIGHT_GRIPPER_BINARY_DIM} "
+                f"threshold={RIGHT_GRIPPER_BINARY_THRESHOLD:.2f} "
+                f"open_width={RIGHT_GRIPPER_OPEN_WIDTH:.5f} "
+                f"closed_width={RIGHT_GRIPPER_CLOSED_WIDTH:.5f} "
+                f"lpf_alpha={ACTION_LPF_ALPHA:.3f} "
+                f"safety_clip={ACTION_SAFETY_CLIP} "
+                f"max_gripper_step={MAX_GRIPPER_STEP:.5f}"
+            )
         
         # 启动推理线程
         self.inference_thread = threading.Thread(target=self._inference_loop, daemon=True)
@@ -342,6 +385,9 @@ class AsyncInferenceManager:
             self.chunk_cur = None
             self.is_inferencing = False
         self.controller.last_commanded_action = None
+        self.controller._last_commanded_right_gripper = None
+        if RIGHT_GRIPPER_DEBUG:
+            _debug_print("[run-stop]")
 
     def _inference_loop(self):
         while self.is_running:
