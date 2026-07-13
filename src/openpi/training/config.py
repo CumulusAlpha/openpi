@@ -101,6 +101,8 @@ class AssetsConfig:
 class DataConfig:
     # LeRobot repo id. If None, fake data will be created.
     repo_id: str | None = None
+    # LeRobot video decoder. PyAV does not require TorchCodec's system FFmpeg libraries.
+    video_backend: Literal["pyav", "torchcodec", "video_reader"] | None = "pyav"
     # Directory within the assets directory containing the data assets.
     asset_id: str | None = None
     # Contains precomputed normalization stats. If None, normalization will not be performed.
